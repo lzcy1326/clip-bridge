@@ -9,4 +9,8 @@
     <UseWindowsForms>true</UseWindowsForms>
   </PropertyGroup>
 
+  <ItemGroup>
+    <ProjectReference Include="..\ClipBridge.Windows\ClipBridge.Windows.csproj" />
+  </ItemGroup>
+
 </Project>
