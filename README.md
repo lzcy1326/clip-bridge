@@ -139,7 +139,7 @@ Docker Compose
 dotnet publish src/client/ClipBridge.App/ClipBridge.App.csproj -p:PublishProfile=win-x64-self-contained
 ```
 
-发布文件位于 `src/client/ClipBridge.App/bin/Release/net10.0-windows/win-x64/publish/`。
+发布文件统一位于 `artifacts/ClipBridge/ClipBridge.App.exe`。
 
 ---
 
@@ -228,10 +228,10 @@ L3: NOT YET
 MVP-04 验证记录：
 
 ```text
-L0 Build: PASS（Release 构建成功，0 警告，0 错误；自包含发布成功）
-Unit Test: PASS（最近文本排序、条数限制和无效参数，3/3）
+L0 Build: PASS（Release 自包含发布成功，输出固定到 artifacts/ClipBridge）
+Unit Test: PASS（历史排序、条数限制、空白过滤、重复更新和旧记录清理，6/6）
 Integration Test: PASS（WPF 启动加载 SQLite 历史，复制文本后刷新列表）
-L1: PASS（用户确认新复制文本显示在列表顶部，退出并重启后仍显示）
+L1: PASS（用户确认新复制文本显示在列表顶部、空白项不显示、重复文本只保留一条并更新时间，Tooltip 锚点正确）
 L2: N/A
 L3: NOT YET
 ```

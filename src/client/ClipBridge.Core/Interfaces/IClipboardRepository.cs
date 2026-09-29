@@ -4,7 +4,7 @@ namespace ClipBridge.Core.Interfaces;
 
 public interface IClipboardRepository
 {
-    ClipboardItem AddText(string text, string originDeviceId);
+    ClipboardItem? AddText(string text, string originDeviceId);
 
     int GetTextCount();
 
