@@ -28,4 +28,14 @@ public partial class App : System.Windows.Application
         _trayIconService?.Dispose();
         base.OnExit(e);
     }
+
+    public void ExitApplication()
+    {
+        if (MainWindow is MainWindow mainWindow)
+        {
+            mainWindow.AllowApplicationExit();
+        }
+
+        Shutdown();
+    }
 }

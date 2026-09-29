@@ -385,11 +385,10 @@ public sealed class SqliteClipboardRepository : IClipboardRepository
                 $now,
                 COALESCE((SELECT MAX(MAX(created_at, COALESCE(last_used_at, created_at))) + 1 FROM clipboard_items), $now),
                 COALESCE((SELECT MAX(created_at, COALESCE(last_used_at, created_at)) + 1 FROM clipboard_items WHERE id = $id), $now))
-            WHERE id = $id AND type = $type;
+            WHERE id = $id;
             """;
         command.Parameters.AddWithValue("$now", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
         command.Parameters.AddWithValue("$id", id);
-        command.Parameters.AddWithValue("$type", TextTypeName);
         var updated = command.ExecuteNonQuery() == 1;
         transaction.Commit();
         return updated;

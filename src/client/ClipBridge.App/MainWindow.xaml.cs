@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using System.ComponentModel;
+using System.IO;
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
@@ -38,6 +39,7 @@ public partial class MainWindow : Window
     private double _savedHeight;
     private bool _hasSavedNormalWindowState;
     private bool _hotkeyRegistrationFailed;
+    private bool _allowApplicationExit;
 
     public MainWindow()
     {
@@ -86,9 +88,7 @@ public partial class MainWindow : Window
         _historyItems.Clear();
         var query = HistorySearchBox.Text;
         var matchingItems = string.IsNullOrWhiteSpace(query)
-            ? _isQuickPasteMode
-                ? _clipboardRepository.GetRecentTextItems(HistoryLimit)
-                : _clipboardRepository.GetRecentItems(HistoryLimit)
+            ? _clipboardRepository.GetRecentItems(HistoryLimit)
             : _clipboardRepository.SearchItems(query, HistoryLimit);
         foreach (var item in matchingItems)
         {
@@ -218,8 +218,7 @@ public partial class MainWindow : Window
 
     private async Task PasteSelectedItemAsync()
     {
-        if (HistoryList.SelectedItem is not ClipBridge.Core.Models.ClipboardItem item
-            || string.IsNullOrEmpty(item.TextContent))
+        if (HistoryList.SelectedItem is not ClipBridge.Core.Models.ClipboardItem item)
         {
             return;
         }
@@ -236,7 +235,7 @@ public partial class MainWindow : Window
         }
 
         System.Windows.MessageBox.Show(
-            "没有完成粘贴。请确认原窗口仍然可用；文本仍保留在剪贴板中。",
+            "没有完成粘贴。请确认原窗口仍然可用；内容仍保留在剪贴板中。",
             "ClipBridge",
             System.Windows.MessageBoxButton.OK,
             System.Windows.MessageBoxImage.Information);
@@ -246,19 +245,34 @@ public partial class MainWindow : Window
         ClipBridge.Core.Models.ClipboardItem item,
         nint targetWindowHandle)
     {
-        if (string.IsNullOrEmpty(item.TextContent))
-        {
-            return false;
-        }
-
         try
         {
-            _clipboardMonitor.SuppressTextCapture(item.TextContent);
-            _clipboardWriter.SetText(item.TextContent);
+            switch (item.Type)
+            {
+                case ClipBridge.Core.Models.ClipboardItemType.Text when !string.IsNullOrEmpty(item.TextContent):
+                    _clipboardMonitor.SuppressTextCapture(item.TextContent);
+                    _clipboardWriter.SetText(item.TextContent);
+                    break;
+                case ClipBridge.Core.Models.ClipboardItemType.Image when !string.IsNullOrEmpty(item.ImagePath):
+                    _clipboardMonitor.SuppressNextImageCapture();
+                    _clipboardWriter.SetImage(item.ImagePath);
+                    break;
+                default:
+                    return false;
+            }
         }
-        catch (ExternalException)
+        catch (Exception exception) when (
+            exception is ExternalException or IOException or UnauthorizedAccessException or ArgumentException)
         {
-            _clipboardMonitor.CancelTextCaptureSuppression(item.TextContent);
+            if (item.Type == ClipBridge.Core.Models.ClipboardItemType.Text && item.TextContent is not null)
+            {
+                _clipboardMonitor.CancelTextCaptureSuppression(item.TextContent);
+            }
+            else
+            {
+                _clipboardMonitor.CancelImageCaptureSuppression();
+            }
+
             System.Windows.MessageBox.Show(
                 "当前剪贴板无法写入，请稍后重试。",
                 "ClipBridge",
@@ -314,6 +328,8 @@ public partial class MainWindow : Window
         Activate();
     }
 
+    public void AllowApplicationExit() => _allowApplicationExit = true;
+
     private void SaveNormalWindowStateIfNeeded()
     {
         if (_hasSavedNormalWindowState)
@@ -352,8 +368,15 @@ public partial class MainWindow : Window
 
     private async void MainWindow_Closing(object? sender, CancelEventArgs e)
     {
+        if (_allowApplicationExit)
+        {
+            return;
+        }
+
         if (!_isQuickPasteMode)
         {
+            e.Cancel = true;
+            Hide();
             return;
         }
 

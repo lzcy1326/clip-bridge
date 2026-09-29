@@ -27,6 +27,7 @@ public sealed class ClipboardMonitor : IDisposable
     private bool _isDisposed;
     private bool _clipboardReadScheduled;
     private int _clipboardReadAttempts;
+    private bool _suppressNextImageCapture;
 
     public ClipboardMonitor(Window window)
     {
@@ -61,6 +62,10 @@ public sealed class ClipboardMonitor : IDisposable
             _suppressedText = null;
         }
     }
+
+    public void SuppressNextImageCapture() => _suppressNextImageCapture = true;
+
+    public void CancelImageCaptureSuppression() => _suppressNextImageCapture = false;
 
     public void Dispose()
     {
@@ -127,6 +132,13 @@ public sealed class ClipboardMonitor : IDisposable
         {
             if (TryReadClipboardImage(out var imageBytes))
             {
+                if (_suppressNextImageCapture)
+                {
+                    _suppressNextImageCapture = false;
+                    ResetClipboardReadRetry();
+                    return;
+                }
+
                 ImageCaptured?.Invoke(imageBytes);
                 ResetClipboardReadRetry();
                 return;

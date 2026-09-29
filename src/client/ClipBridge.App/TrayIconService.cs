@@ -23,7 +23,7 @@ internal sealed class TrayIconService : IDisposable
         var menu = new Forms.ContextMenuStrip();
         menu.Items.Add("打开 ClipBridge", null, (_, _) => ShowMainWindow());
         menu.Items.Add(new Forms.ToolStripSeparator());
-        menu.Items.Add("退出", null, (_, _) => System.Windows.Application.Current.Shutdown());
+        menu.Items.Add("退出", null, (_, _) => ((App)WpfApplication.Current).ExitApplication());
 
         _notifyIcon = new Forms.NotifyIcon
         {

@@ -226,6 +226,23 @@ public sealed class SqliteClipboardRepositoryTests : IDisposable
     }
 
     [Fact]
+    public void MarkUsed_MovesImageToTopAndPreservesCopyMetadata()
+    {
+        var repository = new SqliteClipboardRepository(DatabasePath);
+        var image = repository.AddImage(new byte[] { 1, 2, 3, 4 }, "device-a");
+        repository.AddText("newer text", "device-b");
+
+        Assert.True(repository.MarkUsed(image.Id));
+
+        var recent = repository.GetRecentItems(10);
+        var restored = repository.FindById(image.Id);
+        Assert.Equal(image.Id, recent[0].Id);
+        Assert.Equal(image.CreatedAtUnixMilliseconds, restored!.CreatedAtUnixMilliseconds);
+        Assert.Equal(image.ImagePath, restored.ImagePath);
+        Assert.NotNull(restored.LastUsedAtUnixMilliseconds);
+    }
+
+    [Fact]
     public void Constructor_AddsLastUsedColumnToExistingDatabase()
     {
         Directory.CreateDirectory(_directory);
