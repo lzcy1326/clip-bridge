@@ -8,5 +8,7 @@ public interface IClipboardRepository
 
     int GetTextCount();
 
+    IReadOnlyList<ClipboardItem> GetRecentTextItems(int limit);
+
     ClipboardItem? FindById(string id);
 }

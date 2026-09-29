@@ -14,4 +14,7 @@ public sealed record ClipboardItem(
     string ContentHash,
     long CreatedAtUnixMilliseconds,
     bool Synced,
-    bool Remote);
+    bool Remote)
+{
+    public DateTimeOffset CreatedAt => DateTimeOffset.FromUnixTimeMilliseconds(CreatedAtUnixMilliseconds).ToLocalTime();
+}

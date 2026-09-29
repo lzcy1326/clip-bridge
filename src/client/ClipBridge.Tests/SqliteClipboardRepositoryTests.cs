@@ -35,6 +35,28 @@ public sealed class SqliteClipboardRepositoryTests : IDisposable
         Assert.False(restored.Remote);
     }
 
+    [Fact]
+    public void GetRecentTextItems_ReturnsNewestFirstAndHonorsLimit()
+    {
+        var repository = new SqliteClipboardRepository(DatabasePath);
+        repository.AddText("first", "local");
+        repository.AddText("second", "local");
+        repository.AddText("third", "local");
+
+        var recent = repository.GetRecentTextItems(2);
+
+        Assert.Equal(2, recent.Count);
+        Assert.Equal(new[] { "third", "second" }, recent.Select(item => item.TextContent));
+    }
+
+    [Fact]
+    public void GetRecentTextItems_RejectsNonPositiveLimit()
+    {
+        var repository = new SqliteClipboardRepository(DatabasePath);
+
+        Assert.Throws<ArgumentOutOfRangeException>(() => repository.GetRecentTextItems(0));
+    }
+
     public void Dispose()
     {
         SqliteConnection.ClearAllPools();

@@ -74,6 +74,32 @@ public sealed class SqliteClipboardRepository : IClipboardRepository
         return Convert.ToInt32(command.ExecuteScalar());
     }
 
+    public IReadOnlyList<ClipboardItem> GetRecentTextItems(int limit)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(limit);
+
+        using var connection = OpenConnection();
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT id, origin_device_id, type, text_content, image_path, content_hash, created_at, synced, remote
+            FROM clipboard_items
+            WHERE type = $type
+            ORDER BY created_at DESC, rowid DESC
+            LIMIT $limit;
+            """;
+        command.Parameters.AddWithValue("$type", TextTypeName);
+        command.Parameters.AddWithValue("$limit", limit);
+
+        using var reader = command.ExecuteReader();
+        var items = new List<ClipboardItem>();
+        while (reader.Read())
+        {
+            items.Add(ReadClipboardItem(reader));
+        }
+
+        return items;
+    }
+
     public ClipboardItem? FindById(string id)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(id);
@@ -93,16 +119,7 @@ public sealed class SqliteClipboardRepository : IClipboardRepository
             return null;
         }
 
-        return new ClipboardItem(
-            reader.GetString(0),
-            reader.GetString(1),
-            ParseType(reader.GetString(2)),
-            reader.IsDBNull(3) ? null : reader.GetString(3),
-            reader.IsDBNull(4) ? null : reader.GetString(4),
-            reader.GetString(5),
-            reader.GetInt64(6),
-            reader.GetInt32(7) != 0,
-            reader.GetInt32(8) != 0);
+        return ReadClipboardItem(reader);
     }
 
     private void InitializeDatabase()
@@ -133,6 +150,17 @@ public sealed class SqliteClipboardRepository : IClipboardRepository
         connection.Open();
         return connection;
     }
+
+    private static ClipboardItem ReadClipboardItem(SqliteDataReader reader) => new(
+        reader.GetString(0),
+        reader.GetString(1),
+        ParseType(reader.GetString(2)),
+        reader.IsDBNull(3) ? null : reader.GetString(3),
+        reader.IsDBNull(4) ? null : reader.GetString(4),
+        reader.GetString(5),
+        reader.GetInt64(6),
+        reader.GetInt32(7) != 0,
+        reader.GetInt32(8) != 0);
 
     private static ClipboardItemType ParseType(string type) => type switch
     {
