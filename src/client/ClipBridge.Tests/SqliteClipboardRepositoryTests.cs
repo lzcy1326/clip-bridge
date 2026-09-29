@@ -59,6 +59,51 @@ public sealed class SqliteClipboardRepositoryTests : IDisposable
     }
 
     [Fact]
+    public void SearchTextItems_ReturnsCaseInsensitiveSubstringMatchesNewestFirst()
+    {
+        var repository = new SqliteClipboardRepository(DatabasePath);
+        repository.AddText("alpha older", "local");
+        repository.AddText("unrelated", "local");
+        repository.AddText("ALPHA newer", "local");
+
+        var matches = repository.SearchTextItems("AlPhA", 10);
+
+        Assert.Equal(new[] { "ALPHA newer", "alpha older" }, matches.Select(item => item.TextContent));
+    }
+
+    [Fact]
+    public void SearchTextItems_TreatsLikeWildcardsAsLiteralText()
+    {
+        var repository = new SqliteClipboardRepository(DatabasePath);
+        repository.AddText("100%_complete", "local");
+        repository.AddText("100xxcomplete", "local");
+
+        var matches = repository.SearchTextItems("%_", 10);
+
+        Assert.Equal("100%_complete", Assert.Single(matches).TextContent);
+    }
+
+    [Fact]
+    public void SearchTextItems_BlankQueryReturnsRecentItemsAndHonorsLimit()
+    {
+        var repository = new SqliteClipboardRepository(DatabasePath);
+        repository.AddText("older", "local");
+        repository.AddText("newer", "local");
+
+        var matches = repository.SearchTextItems("  ", 1);
+
+        Assert.Equal("newer", Assert.Single(matches).TextContent);
+    }
+
+    [Fact]
+    public void SearchTextItems_RejectsNonPositiveLimit()
+    {
+        var repository = new SqliteClipboardRepository(DatabasePath);
+
+        Assert.Throws<ArgumentOutOfRangeException>(() => repository.SearchTextItems("text", 0));
+    }
+
+    [Fact]
     public void AddText_IgnoresBlankText()
     {
         var repository = new SqliteClipboardRepository(DatabasePath);

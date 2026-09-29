@@ -47,13 +47,28 @@ public partial class MainWindow : Window
     private void RefreshHistory()
     {
         _historyItems.Clear();
-        foreach (var item in _clipboardRepository.GetRecentTextItems(HistoryLimit))
+        var query = HistorySearchBox.Text;
+        var matchingItems = string.IsNullOrWhiteSpace(query)
+            ? _clipboardRepository.GetRecentTextItems(HistoryLimit)
+            : _clipboardRepository.SearchTextItems(query, HistoryLimit);
+        foreach (var item in matchingItems)
         {
             _historyItems.Add(item);
         }
 
         Title = $"ClipBridge - 跨设备剪贴板 · {_historyItems.Count} 条";
+        EmptyHistoryText.Text = string.IsNullOrWhiteSpace(query)
+            ? "复制的文本会显示在这里。"
+            : "没有匹配的记录。";
         EmptyHistoryText.Visibility = _historyItems.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private void HistorySearchBox_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        SearchPlaceholderText.Visibility = string.IsNullOrEmpty(HistorySearchBox.Text)
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+        RefreshHistory();
     }
 
     private void OnClipboardReadFailed() => Title = "ClipBridge - 跨设备剪贴板 · 暂时无法读取剪贴板";

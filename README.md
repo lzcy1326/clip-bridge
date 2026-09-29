@@ -173,7 +173,7 @@ Codex 每完成一个 MVP 后，在这里更新状态。
 [x] MVP-02 文本 Clipboard 监听
 [x] MVP-03 文本历史持久化
 [x] MVP-04 历史列表 UI
-[ ] MVP-05 历史搜索
+[x] MVP-05 历史搜索
 [ ] MVP-06 Ctrl + ` 呼出
 [ ] MVP-07 文本快速粘贴闭环
 [ ] MVP-08 本地图片 Clipboard
@@ -232,6 +232,16 @@ L0 Build: PASS（Release 自包含发布成功，输出固定到 artifacts/ClipB
 Unit Test: PASS（历史排序、条数限制、空白过滤、重复更新和旧记录清理，6/6）
 Integration Test: PASS（WPF 启动加载 SQLite 历史，复制文本后刷新列表）
 L1: PASS（用户确认历史更新与去重、Tooltip 锚点正确；Ditto 风格序号靠左显示，数字与正文间的竖线贯穿记录行；主页面表头已收进窗口标题栏，记录正文垂直居中）
+L2: N/A
+L3: NOT YET
+```
+
+MVP-05 验证记录：
+
+```text
+L0 Build: PASS（Release 构建成功）
+Unit Test: PASS（搜索大小写不敏感、最近优先、LIKE 特殊字符按字面匹配、空查询恢复最近记录、条数限制，10/10）
+L1: PASS（用户确认关键字筛选、无匹配提示和清空后恢复最近记录均正常）
 L2: N/A
 L3: NOT YET
 ```

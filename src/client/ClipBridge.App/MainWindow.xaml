@@ -17,7 +17,24 @@
 
         <Border Grid.Row="0" CornerRadius="4" Background="White" BorderBrush="#D5DCE2" BorderThickness="1">
             <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                </Grid.RowDefinitions>
+                <Border Grid.Row="0" Margin="8,8,8,6" CornerRadius="3"
+                        Background="#FFFFFF" BorderBrush="#D5DCE2" BorderThickness="1">
+                    <Grid>
+                        <TextBox x:Name="HistorySearchBox" TextChanged="HistorySearchBox_TextChanged"
+                                 Padding="8,5" BorderThickness="0" Background="Transparent"
+                                 FontSize="13" Foreground="#263442"
+                                 ToolTip="搜索本地文本历史" />
+                        <TextBlock x:Name="SearchPlaceholderText" Text="搜索历史…"
+                                   Margin="10,0,0,0" VerticalAlignment="Center"
+                                   Foreground="#82909B" IsHitTestVisible="False" />
+                    </Grid>
+                </Border>
                 <ListBox x:Name="HistoryList"
+                         Grid.Row="1"
                          Margin="1"
                          AlternationCount="1000"
                          BorderThickness="0"

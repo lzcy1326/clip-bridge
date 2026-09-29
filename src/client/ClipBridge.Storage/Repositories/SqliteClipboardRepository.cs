@@ -159,6 +159,48 @@ public sealed class SqliteClipboardRepository : IClipboardRepository
         return items;
     }
 
+    public IReadOnlyList<ClipboardItem> SearchTextItems(string query, int limit)
+    {
+        ArgumentNullException.ThrowIfNull(query);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(limit);
+
+        if (string.IsNullOrWhiteSpace(query))
+        {
+            return GetRecentTextItems(limit);
+        }
+
+        var escapedQuery = query
+            .Replace("\\", "\\\\", StringComparison.Ordinal)
+            .Replace("%", "\\%", StringComparison.Ordinal)
+            .Replace("_", "\\_", StringComparison.Ordinal);
+
+        using var connection = OpenConnection();
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT id, origin_device_id, type, text_content, image_path, content_hash, created_at, synced, remote
+            FROM clipboard_items
+            WHERE type = $type AND text_content LIKE $query ESCAPE '\'
+            ORDER BY created_at DESC, rowid DESC
+            LIMIT $limit;
+            """;
+        command.Parameters.AddWithValue("$type", TextTypeName);
+        command.Parameters.AddWithValue("$query", $"%{escapedQuery}%");
+        command.Parameters.AddWithValue("$limit", limit);
+
+        using var reader = command.ExecuteReader();
+        var items = new List<ClipboardItem>();
+        while (reader.Read())
+        {
+            var item = ReadClipboardItem(reader);
+            if (!string.IsNullOrWhiteSpace(item.TextContent))
+            {
+                items.Add(item);
+            }
+        }
+
+        return items;
+    }
+
     public ClipboardItem? FindById(string id)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(id);
