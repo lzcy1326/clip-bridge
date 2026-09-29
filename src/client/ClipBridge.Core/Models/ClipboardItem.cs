@@ -2,7 +2,8 @@ namespace ClipBridge.Core.Models;
 
 public enum ClipboardItemType
 {
-    Text
+    Text,
+    Image
 }
 
 public sealed record ClipboardItem(

@@ -49,6 +49,7 @@ public partial class MainWindow : Window
 
         _clipboardMonitor = new ClipboardMonitor(this);
         _clipboardMonitor.TextCaptured += OnTextCaptured;
+        _clipboardMonitor.ImageCaptured += OnImageCaptured;
         _clipboardMonitor.ClipboardReadFailed += OnClipboardReadFailed;
         _clipboardMonitor.ListenerFailed += OnListenerFailed;
 
@@ -66,13 +67,29 @@ public partial class MainWindow : Window
         RefreshHistory();
     }
 
+    private void OnImageCaptured(byte[] pngBytes)
+    {
+        try
+        {
+            _clipboardRepository.AddImage(pngBytes, "local");
+            RefreshHistory();
+        }
+        catch (Exception exception)
+        {
+            System.Diagnostics.Trace.TraceError("Failed to save clipboard image: {0}", exception);
+            Title = "ClipBridge - 跨设备剪贴板 · 图片保存失败";
+        }
+    }
+
     private void RefreshHistory()
     {
         _historyItems.Clear();
         var query = HistorySearchBox.Text;
         var matchingItems = string.IsNullOrWhiteSpace(query)
-            ? _clipboardRepository.GetRecentTextItems(HistoryLimit)
-            : _clipboardRepository.SearchTextItems(query, HistoryLimit);
+            ? _isQuickPasteMode
+                ? _clipboardRepository.GetRecentTextItems(HistoryLimit)
+                : _clipboardRepository.GetRecentItems(HistoryLimit)
+            : _clipboardRepository.SearchItems(query, HistoryLimit);
         foreach (var item in matchingItems)
         {
             _historyItems.Add(item);
@@ -87,7 +104,7 @@ public partial class MainWindow : Window
         var hotkeyStatus = _hotkeyRegistrationFailed ? " · 快捷键不可用" : string.Empty;
         Title = $"ClipBridge - 跨设备剪贴板 · {_historyItems.Count} 条{hotkeyStatus}";
         EmptyHistoryText.Text = string.IsNullOrWhiteSpace(query)
-            ? "复制的文本会显示在这里。"
+            ? "复制的文字或图片会显示在这里。"
             : "没有匹配的记录。";
         EmptyHistoryText.Visibility = _historyItems.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
     }

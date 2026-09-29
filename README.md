@@ -178,7 +178,9 @@ Codex 每完成一个 MVP 后，在这里更新状态。
 [x] MVP-07 文本快速粘贴闭环
     L0: PASS（23 项测试；成功粘贴后历史记录置顶，保留原复制时间）
     L1: PASS（用户确认单窗、光标处打开、回车粘贴并置顶、Esc 关闭无闪现，复制监听正常）
-[ ] MVP-08 本地图片 Clipboard
+[x] MVP-08 本地图片 Clipboard
+    L0: PASS（26 项自动测试；Release 构建通过）
+    L1: PASS（用户确认截图记录正常生成，历史列表缩略图可见）
 [ ] MVP-09 图片快速粘贴
 [ ] MVP-10 Server + PostgreSQL 启动
 [ ] MVP-11 管理员创建用户

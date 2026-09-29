@@ -37,6 +37,62 @@ public sealed class SqliteClipboardRepositoryTests : IDisposable
     }
 
     [Fact]
+    public void AddImage_PersistsPngObjectAndShowsItInMixedHistory()
+    {
+        var repository = new SqliteClipboardRepository(DatabasePath);
+        var imageBytes = new byte[] { 137, 80, 78, 71, 13, 10, 26, 10, 1, 2, 3 };
+
+        var added = repository.AddImage(imageBytes, "local");
+        var reopenedRepository = new SqliteClipboardRepository(DatabasePath);
+        var restored = reopenedRepository.FindById(added.Id);
+
+        Assert.Equal(ClipboardItemType.Image, added.Type);
+        Assert.Null(added.TextContent);
+        Assert.Equal(64, added.ContentHash.Length);
+        Assert.EndsWith(".png", added.ImagePath, StringComparison.Ordinal);
+        Assert.True(File.Exists(added.ImagePath));
+        Assert.Equal(imageBytes, File.ReadAllBytes(added.ImagePath!));
+        Assert.NotNull(restored);
+        Assert.Equal(added.ImagePath, restored.ImagePath);
+        Assert.Single(reopenedRepository.GetRecentItems(10));
+        Assert.Equal(added.Id, Assert.Single(reopenedRepository.GetRecentItems(10)).Id);
+    }
+
+    [Fact]
+    public async Task AddImage_DeduplicatesSamePngAndMovesExistingItemToTop()
+    {
+        var repository = new SqliteClipboardRepository(DatabasePath);
+        var imageBytes = new byte[] { 1, 2, 3, 4 };
+        var first = repository.AddImage(imageBytes, "device-a");
+        await Task.Delay(5);
+        repository.AddText("other text", "local");
+        await Task.Delay(5);
+
+        var recopied = repository.AddImage(imageBytes, "device-b");
+
+        Assert.Equal(first.Id, recopied.Id);
+        Assert.True(recopied.CreatedAtUnixMilliseconds > first.CreatedAtUnixMilliseconds);
+        Assert.Equal("device-b", recopied.OriginDeviceId);
+        Assert.Equal(2, repository.GetRecentItems(10).Count);
+        Assert.Equal(recopied.Id, repository.GetRecentItems(10)[0].Id);
+        Assert.Equal(first.ImagePath, recopied.ImagePath);
+        Assert.Single(Directory.GetFiles(Path.Combine(_directory, "objects"), "*.png"));
+    }
+
+    [Fact]
+    public void AddImage_AddsDifferentScreenshotContentAsSeparateHistoryItems()
+    {
+        var repository = new SqliteClipboardRepository(DatabasePath);
+        var firstScreenshot = repository.AddImage(new byte[] { 1, 2, 3 }, "local");
+        var secondScreenshot = repository.AddImage(new byte[] { 4, 5, 6 }, "local");
+
+        Assert.NotEqual(firstScreenshot.Id, secondScreenshot.Id);
+        Assert.NotEqual(firstScreenshot.ContentHash, secondScreenshot.ContentHash);
+        Assert.Equal(2, repository.GetRecentItems(10).Count);
+        Assert.Equal(2, Directory.GetFiles(Path.Combine(_directory, "objects"), "*.png").Length);
+    }
+
+    [Fact]
     public void GetRecentTextItems_ReturnsNewestFirstAndHonorsLimit()
     {
         var repository = new SqliteClipboardRepository(DatabasePath);
@@ -257,7 +313,7 @@ public sealed class SqliteClipboardRepositoryTests : IDisposable
 
         if (Directory.Exists(_directory))
         {
-            Directory.Delete(_directory);
+            Directory.Delete(_directory, recursive: true);
         }
     }
 }

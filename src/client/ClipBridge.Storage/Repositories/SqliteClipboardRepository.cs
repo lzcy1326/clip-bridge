@@ -9,14 +9,18 @@ namespace ClipBridge.Storage.Repositories;
 public sealed class SqliteClipboardRepository : IClipboardRepository
 {
     private const string TextTypeName = "TEXT";
+    private const string ImageTypeName = "IMAGE";
     private readonly string _connectionString;
+    private readonly string _objectsDirectory;
 
     public SqliteClipboardRepository(string databasePath)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(databasePath);
 
         var fullPath = Path.GetFullPath(databasePath);
-        Directory.CreateDirectory(Path.GetDirectoryName(fullPath)!);
+        var dataDirectory = Path.GetDirectoryName(fullPath)!;
+        Directory.CreateDirectory(dataDirectory);
+        _objectsDirectory = Path.Combine(dataDirectory, "objects");
         _connectionString = new SqliteConnectionStringBuilder
         {
             DataSource = fullPath,
@@ -37,7 +41,7 @@ public sealed class SqliteClipboardRepository : IClipboardRepository
         }
 
         var normalizedText = text.Normalize(NormalizationForm.FormC);
-        var contentHash = ComputeContentHash(normalizedText);
+        var contentHash = ComputeContentHash(TextTypeName, Encoding.UTF8.GetBytes(normalizedText));
         var item = new ClipboardItem(
             Guid.NewGuid().ToString("N"),
             originDeviceId,
@@ -120,6 +124,123 @@ public sealed class SqliteClipboardRepository : IClipboardRepository
         return item;
     }
 
+    public ClipboardItem AddImage(ReadOnlyMemory<byte> pngBytes, string originDeviceId)
+    {
+        if (pngBytes.IsEmpty)
+        {
+            throw new ArgumentException("PNG image content cannot be empty.", nameof(pngBytes));
+        }
+
+        ArgumentException.ThrowIfNullOrWhiteSpace(originDeviceId);
+
+        var contentHash = ComputeContentHash(ImageTypeName, pngBytes.Span);
+        var imagePath = Path.Combine(_objectsDirectory, $"{contentHash}.png");
+        if (!File.Exists(imagePath))
+        {
+            Directory.CreateDirectory(_objectsDirectory);
+            var temporaryPath = Path.Combine(_objectsDirectory, $".{contentHash}.{Guid.NewGuid():N}.tmp");
+            try
+            {
+                File.WriteAllBytes(temporaryPath, pngBytes.ToArray());
+                try
+                {
+                    File.Move(temporaryPath, imagePath);
+                }
+                catch (IOException) when (File.Exists(imagePath))
+                {
+                    File.Delete(temporaryPath);
+                }
+            }
+            finally
+            {
+                if (File.Exists(temporaryPath))
+                {
+                    File.Delete(temporaryPath);
+                }
+            }
+        }
+
+        var item = new ClipboardItem(
+            Guid.NewGuid().ToString("N"),
+            originDeviceId,
+            ClipboardItemType.Image,
+            null,
+            imagePath,
+            contentHash,
+            DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            false,
+            false);
+
+        using var connection = OpenConnection();
+        using var transaction = connection.BeginTransaction();
+        using (var findCommand = connection.CreateCommand())
+        {
+            findCommand.Transaction = transaction;
+            findCommand.CommandText = """
+                SELECT id, created_at
+                FROM clipboard_items
+                WHERE type = $type AND content_hash = $content_hash
+                LIMIT 1;
+                """;
+            findCommand.Parameters.AddWithValue("$type", ImageTypeName);
+            findCommand.Parameters.AddWithValue("$content_hash", contentHash);
+
+            using var existingReader = findCommand.ExecuteReader();
+            if (existingReader.Read())
+            {
+                var existingId = existingReader.GetString(0);
+                var existingCreatedAt = existingReader.GetInt64(1);
+                var updatedItem = item with
+                {
+                    Id = existingId,
+                    CreatedAtUnixMilliseconds = Math.Max(item.CreatedAtUnixMilliseconds, existingCreatedAt + 1)
+                };
+                existingReader.Close();
+
+                using var updateCommand = connection.CreateCommand();
+                updateCommand.Transaction = transaction;
+                updateCommand.CommandText = """
+                    UPDATE clipboard_items
+                    SET origin_device_id = $origin_device_id,
+                        image_path = $image_path,
+                        created_at = $created_at,
+                        synced = 0,
+                        remote = 0
+                    WHERE id = $id;
+                    """;
+                updateCommand.Parameters.AddWithValue("$id", existingId);
+                updateCommand.Parameters.AddWithValue("$origin_device_id", updatedItem.OriginDeviceId);
+                updateCommand.Parameters.AddWithValue("$image_path", updatedItem.ImagePath!);
+                updateCommand.Parameters.AddWithValue("$created_at", updatedItem.CreatedAtUnixMilliseconds);
+                updateCommand.ExecuteNonQuery();
+                transaction.Commit();
+
+                return updatedItem;
+            }
+        }
+
+        using (var insertCommand = connection.CreateCommand())
+        {
+            insertCommand.Transaction = transaction;
+            insertCommand.CommandText = """
+                INSERT INTO clipboard_items
+                    (id, origin_device_id, type, text_content, image_path, content_hash, created_at, synced, remote)
+                VALUES
+                    ($id, $origin_device_id, $type, NULL, $image_path, $content_hash, $created_at, 0, 0);
+                """;
+            insertCommand.Parameters.AddWithValue("$id", item.Id);
+            insertCommand.Parameters.AddWithValue("$origin_device_id", item.OriginDeviceId);
+            insertCommand.Parameters.AddWithValue("$type", ImageTypeName);
+            insertCommand.Parameters.AddWithValue("$image_path", imagePath);
+            insertCommand.Parameters.AddWithValue("$content_hash", item.ContentHash);
+            insertCommand.Parameters.AddWithValue("$created_at", item.CreatedAtUnixMilliseconds);
+            insertCommand.ExecuteNonQuery();
+        }
+
+        transaction.Commit();
+        return item;
+    }
+
     public int GetTextCount()
     {
         using var connection = OpenConnection();
@@ -128,6 +249,33 @@ public sealed class SqliteClipboardRepository : IClipboardRepository
         command.Parameters.AddWithValue("$type", TextTypeName);
         return Convert.ToInt32(command.ExecuteScalar());
     }
+
+    public IReadOnlyList<ClipboardItem> GetRecentItems(int limit)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(limit);
+
+        using var connection = OpenConnection();
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT id, origin_device_id, type, text_content, image_path, content_hash, created_at, synced, remote, last_used_at
+            FROM clipboard_items
+            ORDER BY MAX(created_at, COALESCE(last_used_at, created_at)) DESC, rowid DESC
+            LIMIT $limit;
+            """;
+        command.Parameters.AddWithValue("$limit", limit);
+
+        using var reader = command.ExecuteReader();
+        var items = new List<ClipboardItem>();
+        while (reader.Read())
+        {
+            items.Add(ReadClipboardItem(reader));
+        }
+
+        return items;
+    }
+
+    public IReadOnlyList<ClipboardItem> SearchItems(string query, int limit) =>
+        SearchTextItems(query, limit);
 
     public IReadOnlyList<ClipboardItem> GetRecentTextItems(int limit)
     {
@@ -266,6 +414,9 @@ public sealed class SqliteClipboardRepository : IClipboardRepository
             );
             CREATE INDEX IF NOT EXISTS ix_clipboard_items_created_at
                 ON clipboard_items (created_at DESC);
+            CREATE UNIQUE INDEX IF NOT EXISTS ux_clipboard_items_image_content_hash
+                ON clipboard_items (content_hash)
+                WHERE type = 'IMAGE';
             """;
         command.ExecuteNonQuery();
         EnsureLastUsedColumn(connection);
@@ -309,7 +460,10 @@ public sealed class SqliteClipboardRepository : IClipboardRepository
             {
                 var id = reader.GetString(0);
                 var text = reader.IsDBNull(1) ? null : reader.GetString(1);
-                if (string.IsNullOrWhiteSpace(text) || !seenContentHashes.Add(ComputeContentHash(text.Normalize(NormalizationForm.FormC))))
+                if (string.IsNullOrWhiteSpace(text)
+                    || !seenContentHashes.Add(ComputeContentHash(
+                        TextTypeName,
+                        Encoding.UTF8.GetBytes(text.Normalize(NormalizationForm.FormC)))))
                 {
                     invalidIds.Add(id);
                 }
@@ -353,13 +507,18 @@ public sealed class SqliteClipboardRepository : IClipboardRepository
         reader.GetInt32(8) != 0,
         reader.IsDBNull(9) ? null : reader.GetInt64(9));
 
-    private static string ComputeContentHash(string normalizedText) => Convert.ToHexString(
-        SHA256.HashData(Encoding.UTF8.GetBytes(TextTypeName + normalizedText)))
-        .ToLowerInvariant();
+    private static string ComputeContentHash(string type, ReadOnlySpan<byte> content)
+    {
+        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        hash.AppendData(Encoding.UTF8.GetBytes(type));
+        hash.AppendData(content);
+        return Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant();
+    }
 
     private static ClipboardItemType ParseType(string type) => type switch
     {
         TextTypeName => ClipboardItemType.Text,
+        ImageTypeName => ClipboardItemType.Image,
         _ => throw new InvalidDataException($"Unsupported clipboard item type '{type}'.")
     };
 }
