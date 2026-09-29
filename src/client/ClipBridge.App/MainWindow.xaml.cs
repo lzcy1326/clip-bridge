@@ -17,8 +17,10 @@ public partial class MainWindow : Window
     private const uint SwpNoZOrder = 0x0004;
     private const uint SwpNoActivate = 0x0010;
     private readonly ClipboardMonitor _clipboardMonitor;
+    private readonly GlobalHotkey _globalHotkey;
     private readonly IClipboardRepository _clipboardRepository;
     private readonly ObservableCollection<ClipBridge.Core.Models.ClipboardItem> _historyItems = [];
+    private bool _hotkeyRegistrationFailed;
 
     public MainWindow()
     {
@@ -32,6 +34,9 @@ public partial class MainWindow : Window
         _clipboardMonitor.TextCaptured += OnTextCaptured;
         _clipboardMonitor.ClipboardReadFailed += OnClipboardReadFailed;
         _clipboardMonitor.ListenerFailed += OnListenerFailed;
+
+        _globalHotkey = new GlobalHotkey(this, ActivateMainWindow);
+        _globalHotkey.RegistrationFailed += OnHotkeyRegistrationFailed;
     }
 
     private void OnTextCaptured(string text)
@@ -56,7 +61,8 @@ public partial class MainWindow : Window
             _historyItems.Add(item);
         }
 
-        Title = $"ClipBridge - 跨设备剪贴板 · {_historyItems.Count} 条";
+        var hotkeyStatus = _hotkeyRegistrationFailed ? " · 快捷键不可用" : string.Empty;
+        Title = $"ClipBridge - 跨设备剪贴板 · {_historyItems.Count} 条{hotkeyStatus}";
         EmptyHistoryText.Text = string.IsNullOrWhiteSpace(query)
             ? "复制的文本会显示在这里。"
             : "没有匹配的记录。";
@@ -74,6 +80,27 @@ public partial class MainWindow : Window
     private void OnClipboardReadFailed() => Title = "ClipBridge - 跨设备剪贴板 · 暂时无法读取剪贴板";
 
     private void OnListenerFailed(Exception _) => Title = "ClipBridge - 跨设备剪贴板 · 无法启动文本剪贴板监听";
+
+    private void OnHotkeyRegistrationFailed(Exception _)
+    {
+        _hotkeyRegistrationFailed = true;
+        Title = $"ClipBridge - 跨设备剪贴板 · {_historyItems.Count} 条 · 快捷键不可用";
+    }
+
+    private void ActivateMainWindow()
+    {
+        if (!IsVisible)
+        {
+            Show();
+        }
+
+        if (WindowState == WindowState.Minimized)
+        {
+            WindowState = WindowState.Normal;
+        }
+
+        Activate();
+    }
 
     private void HistoryToolTip_Opened(object sender, RoutedEventArgs e)
     {

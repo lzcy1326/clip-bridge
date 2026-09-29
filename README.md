@@ -254,6 +254,16 @@ L2: N/A
 L3: NOT YET
 ```
 
+MVP-06 验证记录：
+
+```text
+L0 Build: PASS（Release 构建成功，0 警告、0 错误）
+Unit Test: PASS（完整自动测试回归 17/17）
+L1: PASS（用户确认全局快捷键唤醒、重复激活、最小化恢复及退出释放）
+L2: N/A
+L3: NOT YET
+```
+
 不要手工勾选未验证场景。
 
 ---
