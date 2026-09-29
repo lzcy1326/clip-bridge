@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" role="img" aria-label="ClipBridge icon">
+  <title>ClipBridge icon</title>
+  <defs>
+    <style>
+      .bg { fill: #138BFF; }
+      .front { fill: #FFFFFF; }
+      .back { fill: #DCEBFA; }
+      .back-handle { fill: #CDE1F6; }
+      .front-handle { fill: #D4E5F8; }
+      .arrow { fill: #177DFF; }
+    </style>
+  </defs>
+
+  <!-- Background -->
+  <rect class="bg" x="0" y="0" width="1024" height="1024" rx="140" ry="140"/>
+
+  <!-- Back clipboard -->
+  <rect class="back" x="436" y="351" width="424" height="468" rx="56" ry="56"/>
+  <rect class="back-handle" x="584" y="312" width="170" height="38" rx="19" ry="19"/>
+  <rect class="back-handle" x="511" y="292" width="212" height="62" rx="24" ry="24"/>
+  <rect class="bg" x="563" y="310" width="108" height="24" rx="12" ry="12"/>
+
+  <!-- Front clipboard -->
+  <rect class="front" x="136" y="246" width="514" height="542" rx="60" ry="60"/>
+  <rect class="front-handle" x="258" y="198" width="255" height="74" rx="30" ry="30"/>
+  <rect class="front" x="203" y="150" width="314" height="94" rx="38" ry="38"/>
+  <rect class="bg" x="266" y="185" width="188" height="34" rx="17" ry="17"/>
+
+  <!-- Upper arrow -->
+  <path class="arrow" d="M 267 542
+      C 308 450, 396 393, 504 389
+      L 504 340
+      C 504 330, 516 323, 524 330
+      L 636 441
+      C 643 448, 643 460, 636 467
+      L 524 578
+      C 516 585, 504 578, 504 568
+      L 504 518
+      C 421 518, 355 557, 316 625
+      C 299 653, 256 626, 267 542 Z"/>
+
+  <!-- Lower arrow -->
+  <path class="arrow" d="M 493 671
+      C 566 667, 628 632, 672 570
+      C 689 546, 727 567, 718 601
+      C 691 693, 603 744, 493 748
+      L 493 796
+      C 493 806, 481 813, 473 806
+      L 360 695
+      C 353 688, 353 676, 360 669
+      L 473 558
+      C 481 551, 493 558, 493 568
+      L 493 618
+      C 438 621, 390 644, 353 684
+      C 322 716, 279 683, 308 647
+      C 353 593, 415 560, 493 557
+      L 493 671 Z"/>
+</svg>

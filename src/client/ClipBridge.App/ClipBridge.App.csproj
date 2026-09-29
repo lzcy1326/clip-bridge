@@ -7,7 +7,13 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWPF>true</UseWPF>
     <UseWindowsForms>true</UseWindowsForms>
+    <ApplicationIcon>Assets\Icons\clipbridge.ico</ApplicationIcon>
   </PropertyGroup>
+
+  <ItemGroup>
+    <Resource Include="Assets\Icons\clipbridge.ico" />
+    <Resource Include="Assets\Icons\clipbridge_64.png" />
+  </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\ClipBridge.Core\ClipBridge.Core.csproj" />

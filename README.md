@@ -199,7 +199,7 @@ MVP-01 验证记录：
 ```text
 L0 Build: PASS
 Unit Test: N/A（当前没有测试项目）
-L1: PASS（用户确认窗口、托盘菜单和退出操作正常；自包含发布程序启动正常）
+L1: PASS（用户确认窗口、托盘菜单和退出操作正常；自包含发布程序启动正常，应用图标已显示在窗口标题栏）
 L2: N/A
 L3: NOT YET
 ```
@@ -231,7 +231,7 @@ MVP-04 验证记录：
 L0 Build: PASS（Release 自包含发布成功，输出固定到 artifacts/ClipBridge）
 Unit Test: PASS（历史排序、条数限制、空白过滤、重复更新和旧记录清理，6/6）
 Integration Test: PASS（WPF 启动加载 SQLite 历史，复制文本后刷新列表）
-L1: PASS（用户确认历史更新与去重、Tooltip 锚点正确；Ditto 风格序号靠左显示，数字与正文间的竖线贯穿记录行）
+L1: PASS（用户确认历史更新与去重、Tooltip 锚点正确；Ditto 风格序号靠左显示，数字与正文间的竖线贯穿记录行；主页面表头已收进窗口标题栏，记录正文垂直居中）
 L2: N/A
 L3: NOT YET
 ```

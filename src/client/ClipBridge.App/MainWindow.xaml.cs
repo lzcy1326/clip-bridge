@@ -27,9 +27,6 @@ public partial class MainWindow : Window
         HistoryList.ItemsSource = _historyItems;
         _clipboardRepository = ((App)System.Windows.Application.Current).ClipboardRepository;
         RefreshHistory();
-        ClipboardStatusText.Text = _historyItems.Count == 0
-            ? "等待复制文本。"
-            : $"本地历史中已有 {_historyItems.Count} 条文本记录。";
 
         _clipboardMonitor = new ClipboardMonitor(this);
         _clipboardMonitor.TextCaptured += OnTextCaptured;
@@ -45,7 +42,6 @@ public partial class MainWindow : Window
         }
 
         RefreshHistory();
-        ClipboardStatusText.Text = $"已保存到本地历史（{_historyItems.Count} 条文本记录）。";
     }
 
     private void RefreshHistory()
@@ -56,13 +52,13 @@ public partial class MainWindow : Window
             _historyItems.Add(item);
         }
 
-        HistoryCountText.Text = $"{_historyItems.Count} 条";
+        Title = $"ClipBridge - 跨设备剪贴板 · {_historyItems.Count} 条";
         EmptyHistoryText.Visibility = _historyItems.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
     }
 
-    private void OnClipboardReadFailed() => ClipboardStatusText.Text = "暂时无法读取剪贴板，请重试。";
+    private void OnClipboardReadFailed() => Title = "ClipBridge - 跨设备剪贴板 · 暂时无法读取剪贴板";
 
-    private void OnListenerFailed(Exception _) => ClipboardStatusText.Text = "无法启动文本剪贴板监听。";
+    private void OnListenerFailed(Exception _) => Title = "ClipBridge - 跨设备剪贴板 · 无法启动文本剪贴板监听";
 
     private void HistoryToolTip_Opened(object sender, RoutedEventArgs e)
     {

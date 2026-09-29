@@ -2,37 +2,20 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:app="clr-namespace:ClipBridge.App"
-        Title="ClipBridge" Height="620" Width="620"
+        Title="ClipBridge - 跨设备剪贴板" Height="620" Width="620"
+        Icon="pack://application:,,,/ClipBridge.App;component/Assets/Icons/clipbridge.ico"
         MinHeight="360" MinWidth="420"
         WindowStartupLocation="CenterScreen"
         Background="#F4F6F8">
     <Window.Resources>
         <app:HistorySequenceNumberConverter x:Key="HistorySequenceNumberConverter" />
     </Window.Resources>
-    <Grid Margin="12">
+    <Grid Margin="8">
         <Grid.RowDefinitions>
-            <RowDefinition Height="Auto" />
-            <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
 
-        <Grid Margin="0,0,0,4">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="*" />
-                <ColumnDefinition Width="Auto" />
-            </Grid.ColumnDefinitions>
-            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                <TextBlock Text="ClipBridge" FontSize="20" FontWeight="SemiBold" Foreground="#17212B" />
-                <TextBlock Text="跨设备剪贴板" Margin="10,4,0,0" FontSize="11" Foreground="#71808D" />
-            </StackPanel>
-            <TextBlock x:Name="HistoryCountText" Grid.Column="1" Text="0 条"
-                       VerticalAlignment="Center" FontSize="12" Foreground="#596773" />
-        </Grid>
-
-        <TextBlock x:Name="ClipboardStatusText" Grid.Row="1" Text="等待复制文本。"
-                   Margin="0,0,0,7" FontSize="11" Foreground="#2563A6" />
-
-        <Border Grid.Row="2" CornerRadius="4" Background="White" BorderBrush="#D5DCE2" BorderThickness="1">
+        <Border Grid.Row="0" CornerRadius="4" Background="White" BorderBrush="#D5DCE2" BorderThickness="1">
             <Grid>
                 <ListBox x:Name="HistoryList"
                          Margin="1"
@@ -114,6 +97,7 @@
                                         Background="#D5DCE2" VerticalAlignment="Stretch" />
                                 <TextBlock Grid.Column="2" Text="{Binding TextContent}"
                                            Margin="8,0,2,0"
+                                           VerticalAlignment="Center"
                                            TextTrimming="CharacterEllipsis"
                                            TextWrapping="NoWrap"
                                            FontSize="13" Foreground="#263442" />
