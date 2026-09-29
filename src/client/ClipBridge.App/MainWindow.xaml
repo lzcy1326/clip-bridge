@@ -20,7 +20,7 @@
         <Border Grid.Row="1" Margin="0,24,0,20" Padding="18" CornerRadius="10" Background="White">
             <StackPanel VerticalAlignment="Center">
                 <TextBlock Text="文本剪贴板监听已启用" FontSize="18" FontWeight="SemiBold" Foreground="#17212B" />
-                <TextBlock Text="复制文本后，ClipBridge 会在这里显示检测状态；内容尚不会保存到历史。"
+                <TextBlock Text="复制的文本会保存到本地历史，并在重新启动后保留。"
                            Margin="0,8,0,0" TextWrapping="Wrap" FontSize="13" Foreground="#596773" />
                 <TextBlock x:Name="ClipboardStatusText" Text="等待复制文本。"
                            Margin="0,16,0,0" FontSize="13" Foreground="#2563A6" />

@@ -171,7 +171,7 @@ Codex 每完成一个 MVP 后，在这里更新状态。
 ```text
 [x] MVP-01 应用可启动
 [x] MVP-02 文本 Clipboard 监听
-[ ] MVP-03 文本历史持久化
+[x] MVP-03 文本历史持久化
 [ ] MVP-04 历史列表 UI
 [ ] MVP-05 历史搜索
 [ ] MVP-06 Ctrl + ` 呼出
@@ -210,6 +210,17 @@ MVP-02 验证记录：
 L0 Build: PASS
 Unit Test: N/A（当前没有测试项目）
 L1: PASS（用户复制测试文本后确认识别内容与字符数正确）
+L2: N/A
+L3: NOT YET
+```
+
+MVP-03 验证记录：
+
+```text
+L0 Build: PASS（Release 自包含发布成功）
+Unit Test: PASS（SQLite 记录写入并重新打开数据库读取，1/1）
+Integration Test: PASS（应用启动时初始化本地数据库；文本记录在退出并重启后保留）
+L1: PASS（用户确认复制测试文本后显示 1 条记录，退出并重启后仍显示 1 条）
 L2: N/A
 L3: NOT YET
 ```
