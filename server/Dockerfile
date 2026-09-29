@@ -8,10 +8,12 @@ COPY . .
 ARG TARGETOS=linux
 ARG TARGETARCH
 RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath -ldflags="-s -w" -o /out/clipbridge-server ./cmd/server
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath -ldflags="-s -w" -o /out/clipbridge-admin ./cmd/admin
 
 FROM alpine:3.24
 RUN apk add --no-cache ca-certificates
 COPY --from=builder /out/clipbridge-server /usr/local/bin/clipbridge-server
+COPY --from=builder /out/clipbridge-admin /usr/local/bin/clipbridge-admin
 
 USER 65532:65532
 EXPOSE 8080

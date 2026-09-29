@@ -187,7 +187,9 @@ Codex 每完成一个 MVP 后，在这里更新状态。
 [x] MVP-10 Server + PostgreSQL 启动
     L0: PASS（Go 单元测试通过；服务二进制构建成功）
     L1: PASS（PostgreSQL 与 Gin 容器均健康；`/health` 返回 HTTP 200 和 `{"status":"ok"}`）
-[ ] MVP-11 管理员创建用户
+[x] MVP-11 管理员创建用户
+    L0: PASS（账号名校验、密码策略、Argon2id 独立随机盐测试；Go 全量测试与构建通过）
+    L1: PASS（本机管理命令成功创建 USER/ACTIVE 账号；数据库验证密码字段为 Argon2id 哈希）
 [ ] MVP-12 用户登录
 [ ] MVP-13 设备注册
 [ ] MVP-14 文本上传 Server
@@ -280,6 +282,16 @@ L0 Build: PASS（`go build ./...`；Linux 容器镜像构建成功）
 L1: PASS（Docker Compose 中 PostgreSQL 和 Gin 服务均为 healthy；`http://localhost:18080/health` 返回 HTTP 200 和 `{"status":"ok"}`）
 端口说明：默认主机端口为 8080；本机已有 WSL MetaTube 服务占用 8080，本轮使用 `CLIPBRIDGE_SERVER_PORT=18080` 验收。服务容器仍监听 8080。
 启动命令：`docker compose up --build -d`
+```
+
+MVP-11 验证记录：
+
+```text
+L0 Unit Test: PASS（账号包 3 项；Go 全量测试通过）
+L0 Build: PASS（Go 服务与管理命令构建成功；Docker 镜像构建成功）
+L1: PASS（通过容器内 `clipbridge-admin create-user` 创建本地 USER；PostgreSQL 中角色为 USER、状态为 ACTIVE，密码仅保存 Argon2id 哈希）
+管理命令从标准输入读取两行：第一行为用户名，第二行为密码；只在本机 Docker 容器内运行，不开放未认证的网络创建接口。
+本机测试账号凭据保存在当前 Windows 用户的 `%LOCALAPPDATA%\ClipBridge\local-test-account.txt`，该文件未加入版本控制。
 ```
 
 不要手工勾选未验证场景。
