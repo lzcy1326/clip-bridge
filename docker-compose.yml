@@ -1,0 +1,31 @@
+services:
+  postgres:
+    image: postgres:18.6-alpine3.24
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-clipbridge}
+      POSTGRES_USER: ${POSTGRES_USER:-clipbridge_dev}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-clipbridge_dev_only}
+    volumes:
+      - postgres_data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+    restart: unless-stopped
+
+  server:
+    build:
+      context: ./server
+    environment:
+      CLIPBRIDGE_SERVER_ADDR: 0.0.0.0:8080
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "${CLIPBRIDGE_SERVER_PORT:-8080}:8080"
+    restart: unless-stopped
+
+volumes:
+  postgres_data:

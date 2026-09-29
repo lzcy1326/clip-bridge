@@ -184,7 +184,9 @@ Codex 每完成一个 MVP 后，在这里更新状态。
 [x] MVP-09 图片快速粘贴
     L0: PASS（27 项自动测试；Release 构建通过）
     L1: PASS（用户确认快捷呼出显示旧图片，回车粘贴并置顶）
-[ ] MVP-10 Server + PostgreSQL 启动
+[x] MVP-10 Server + PostgreSQL 启动
+    L0: PASS（Go 单元测试通过；服务二进制构建成功）
+    L1: PASS（PostgreSQL 与 Gin 容器均健康；`/health` 返回 HTTP 200 和 `{"status":"ok"}`）
 [ ] MVP-11 管理员创建用户
 [ ] MVP-12 用户登录
 [ ] MVP-13 设备注册
@@ -268,6 +270,16 @@ Unit Test: PASS（完整自动测试回归 17/17）
 L1: PASS（用户确认全局快捷键唤醒、重复激活、最小化恢复及退出释放）
 L2: N/A
 L3: NOT YET
+```
+
+MVP-10 验证记录：
+
+```text
+L0 Unit Test: PASS（Go 1.27，`go test ./...`）
+L0 Build: PASS（`go build ./...`；Linux 容器镜像构建成功）
+L1: PASS（Docker Compose 中 PostgreSQL 和 Gin 服务均为 healthy；`http://localhost:18080/health` 返回 HTTP 200 和 `{"status":"ok"}`）
+端口说明：默认主机端口为 8080；本机已有 WSL MetaTube 服务占用 8080，本轮使用 `CLIPBRIDGE_SERVER_PORT=18080` 验收。服务容器仍监听 8080。
+启动命令：`docker compose up --build -d`
 ```
 
 不要手工勾选未验证场景。
