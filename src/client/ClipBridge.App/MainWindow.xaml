@@ -1,10 +1,14 @@
 <Window x:Class="ClipBridge.App.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:app="clr-namespace:ClipBridge.App"
         Title="ClipBridge" Height="620" Width="620"
         MinHeight="360" MinWidth="420"
         WindowStartupLocation="CenterScreen"
         Background="#F4F6F8">
+    <Window.Resources>
+        <app:HistorySequenceNumberConverter x:Key="HistorySequenceNumberConverter" />
+    </Window.Resources>
     <Grid Margin="12">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
@@ -32,7 +36,7 @@
             <Grid>
                 <ListBox x:Name="HistoryList"
                          Margin="1"
-                         AlternationCount="2"
+                         AlternationCount="1000"
                          BorderThickness="0"
                          Background="Transparent"
                          ScrollViewer.CanContentScroll="True"
@@ -40,10 +44,10 @@
                          VirtualizingPanel.VirtualizationMode="Recycling">
                     <ListBox.ItemContainerStyle>
                         <Style TargetType="ListBoxItem">
-                            <Setter Property="Padding" Value="8,0" />
+                            <Setter Property="Padding" Value="4,0" />
                             <Setter Property="MinHeight" Value="34" />
                             <Setter Property="HorizontalContentAlignment" Value="Stretch" />
-                            <Setter Property="VerticalContentAlignment" Value="Center" />
+                            <Setter Property="VerticalContentAlignment" Value="Stretch" />
                             <Setter Property="BorderBrush" Value="#E2E6EA" />
                             <Setter Property="BorderThickness" Value="0,0,0,1" />
                             <Setter Property="Background" Value="#FFFFFF" />
@@ -63,7 +67,7 @@
                     </ListBox.ItemContainerStyle>
                     <ListBox.ItemTemplate>
                         <DataTemplate>
-                            <Grid Margin="0,1" VerticalAlignment="Center"
+                            <Grid VerticalAlignment="Stretch"
                                   ToolTipService.InitialShowDelay="350">
                                 <Grid.ToolTip>
                                     <ToolTip DataContext="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource Self}}"
@@ -99,12 +103,16 @@
                                     </ToolTip>
                                 </Grid.ToolTip>
                                 <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="4" />
+                                    <ColumnDefinition Width="22" />
+                                    <ColumnDefinition Width="1" />
                                     <ColumnDefinition Width="*" />
                                 </Grid.ColumnDefinitions>
-                                <Border Width="3" Height="16" CornerRadius="1" Background="#8AAAC5"
-                                        VerticalAlignment="Center" />
-                                <TextBlock Grid.Column="1" Text="{Binding TextContent}"
+                                <TextBlock Text="{Binding Path=(ItemsControl.AlternationIndex), RelativeSource={RelativeSource AncestorType={x:Type ListBoxItem}}, Converter={StaticResource HistorySequenceNumberConverter}}"
+                                           HorizontalAlignment="Left" VerticalAlignment="Center"
+                                           FontSize="11" Foreground="#8493A0" />
+                                <Border Grid.Column="1" Width="1"
+                                        Background="#D5DCE2" VerticalAlignment="Stretch" />
+                                <TextBlock Grid.Column="2" Text="{Binding TextContent}"
                                            Margin="8,0,2,0"
                                            TextTrimming="CharacterEllipsis"
                                            TextWrapping="NoWrap"
