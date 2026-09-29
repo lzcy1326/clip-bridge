@@ -190,7 +190,9 @@ Codex 每完成一个 MVP 后，在这里更新状态。
 [x] MVP-11 管理员创建用户
     L0: PASS（账号名校验、密码策略、Argon2id 独立随机盐测试；Go 全量测试与构建通过）
     L1: PASS（本机管理命令成功创建 USER/ACTIVE 账号；数据库验证密码字段为 Argon2id 哈希）
-[ ] MVP-12 用户登录
+[x] MVP-12 用户登录
+    L0: PASS（Argon2id 密码核验、JWT 签名与声明、统一凭据错误、请求体限制及 IP 限流测试；Go 全量测试与构建通过）
+    L1: PASS（本机 Compose 服务中，测试账号登录返回 15 分钟 Bearer Token；错误密码、未知及禁用账号均返回 401；健康检查正常）
 [ ] MVP-13 设备注册
 [ ] MVP-14 文本上传 Server
 [ ] MVP-15 第二设备拉取历史
@@ -292,6 +294,16 @@ L0 Build: PASS（Go 服务与管理命令构建成功；Docker 镜像构建成�
 L1: PASS（通过容器内 `clipbridge-admin create-user` 创建本地 USER；PostgreSQL 中角色为 USER、状态为 ACTIVE，密码仅保存 Argon2id 哈希）
 管理命令从标准输入读取两行：第一行为用户名，第二行为密码；只在本机 Docker 容器内运行，不开放未认证的网络创建接口。
 本机测试账号凭据保存在当前 Windows 用户的 `%LOCALAPPDATA%\ClipBridge\local-test-account.txt`，该文件未加入版本控制。
+```
+
+MVP-12 验证记录：
+
+```text
+L0 Unit Test: PASS（账号密码哈希验证、JWT 签发、登录 API 请求校验和 IP 限流测试；Go 全量测试通过）
+L0 Build: PASS（Go 全量构建及 Docker 镜像构建成功）
+L1: PASS（本机登录 API 实测成功；错误密码、未知用户及禁用用户统一返回 HTTP 401；`/health` 正常）
+Access Token: HS256，15 分钟有效；刷新令牌留待后续 MVP。
+本机密钥通过 `.env` 的 `CLIPBRIDGE_JWT_SECRET` 配置，要求至少 32 字节；`.env` 已忽略，`.env.example` 只含占位值。
 ```
 
 不要手工勾选未验证场景。

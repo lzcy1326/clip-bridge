@@ -5,3 +5,6 @@
 .vs/
 *.user
 *.suo
+.env
+.env.*
+!.env.example

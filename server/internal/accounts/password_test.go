@@ -43,3 +43,29 @@ func TestHashPasswordRejectsShortPassword(t *testing.T) {
 		t.Fatal("HashPassword() expected a validation error")
 	}
 }
+
+func TestVerifyPassword(t *testing.T) {
+	encoded, err := HashPassword("correct horse battery staple")
+	if err != nil {
+		t.Fatalf("HashPassword() error = %v", err)
+	}
+	if !VerifyPassword("correct horse battery staple", encoded) {
+		t.Fatal("VerifyPassword() rejected the correct password")
+	}
+	if VerifyPassword("incorrect password", encoded) {
+		t.Fatal("VerifyPassword() accepted an incorrect password")
+	}
+}
+
+func TestVerifyPasswordRejectsMalformedOrExpensiveParameters(t *testing.T) {
+	for _, encoded := range []string{
+		"",
+		"$argon2id$v=19$m=999999999,t=3,p=4$YWJj$YWJj",
+		"$argon2id$v=19$m=65536,t=3,p=4$invalid$invalid",
+		"$argon2i$v=19$m=65536,t=3,p=4$YWJj$YWJj",
+	} {
+		if VerifyPassword("some password", encoded) {
+			t.Errorf("VerifyPassword() accepted malformed hash %q", encoded)
+		}
+	}
+}

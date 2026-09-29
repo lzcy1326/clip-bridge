@@ -2,9 +2,11 @@ package accounts
 
 import (
 	"crypto/rand"
+	"crypto/subtle"
 	"encoding/base64"
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"golang.org/x/crypto/argon2"
@@ -42,4 +44,53 @@ func HashPassword(password string) (string, error) {
 	encodedSalt := base64.RawStdEncoding.EncodeToString(salt)
 	encodedHash := base64.RawStdEncoding.EncodeToString(hash)
 	return fmt.Sprintf("$argon2id$v=19$m=%d,t=%d,p=%d$%s$%s", argonMemory, argonIterations, argonParallelism, encodedSalt, encodedHash), nil
+}
+
+// VerifyPassword checks a password against hashes produced by HashPassword.
+// The parameters are deliberately fixed so malformed database values cannot
+// request unbounded memory or CPU during login.
+func VerifyPassword(password, encodedHash string) bool {
+	parts := strings.Split(encodedHash, "$")
+	if len(parts) != 6 || parts[0] != "" || parts[1] != "argon2id" || parts[2] != "v=19" {
+		return false
+	}
+
+	parameters := strings.Split(parts[3], ",")
+	if len(parameters) != 3 {
+		return false
+	}
+	values := make(map[string]int, 3)
+	for _, parameter := range parameters {
+		key, value, ok := strings.Cut(parameter, "=")
+		if !ok {
+			return false
+		}
+		if _, exists := values[key]; exists {
+			return false
+		}
+		parsed, err := strconv.Atoi(value)
+		if err != nil {
+			return false
+		}
+		values[key] = parsed
+	}
+	if values["m"] != argonMemory || values["t"] != argonIterations || values["p"] != argonParallelism || len(values) != 3 {
+		return false
+	}
+
+	salt, err := base64.RawStdEncoding.DecodeString(parts[4])
+	if err != nil || len(salt) != argonSaltLength {
+		return false
+	}
+	expected, err := base64.RawStdEncoding.DecodeString(parts[5])
+	if err != nil || len(expected) != argonKeyLength {
+		return false
+	}
+	actual := argon2.IDKey([]byte(password), salt, argonIterations, argonMemory, argonParallelism, uint32(len(expected)))
+	return subtle.ConstantTimeCompare(actual, expected) == 1
+}
+
+func burnPasswordHash(password string) {
+	salt := []byte("ClipBridge-login")
+	argon2.IDKey([]byte(password), salt, argonIterations, argonMemory, argonParallelism, argonKeyLength)
 }

@@ -4,13 +4,23 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type Store struct {
 	pool *pgxpool.Pool
+}
+
+var ErrInvalidCredentials = errors.New("invalid credentials")
+
+type AuthenticatedUser struct {
+	ID          int64
+	Username    string
+	DisplayName string
 }
 
 func Open(ctx context.Context, databaseURL string) (*Store, error) {
@@ -72,4 +82,37 @@ RETURNING id`, normalizedUsername, passwordHash).Scan(&id)
 		return 0, fmt.Errorf("create user: %w", err)
 	}
 	return id, nil
+}
+
+func (store *Store) Authenticate(ctx context.Context, username, password string) (AuthenticatedUser, error) {
+	normalizedUsername, err := NormalizeUsername(username)
+	if err != nil {
+		burnPasswordHash(password)
+		return AuthenticatedUser{}, ErrInvalidCredentials
+	}
+
+	var user AuthenticatedUser
+	var passwordHash string
+	var status string
+	err = store.pool.QueryRow(ctx, `
+SELECT id, username, display_name, password_hash, status
+FROM users
+WHERE LOWER(username) = $1`, normalizedUsername).Scan(
+		&user.ID, &user.Username, &user.DisplayName, &passwordHash, &status,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		burnPasswordHash(password)
+		return AuthenticatedUser{}, ErrInvalidCredentials
+	}
+	if err != nil {
+		return AuthenticatedUser{}, fmt.Errorf("load user for authentication: %w", err)
+	}
+	if !VerifyPassword(password, passwordHash) || status != "ACTIVE" {
+		return AuthenticatedUser{}, ErrInvalidCredentials
+	}
+	if _, err := store.pool.Exec(ctx, `UPDATE users SET last_login_at = NOW() WHERE id = $1`, user.ID); err != nil {
+		return AuthenticatedUser{}, fmt.Errorf("update last login: %w", err)
+	}
+	user.Username = strings.ToLower(user.Username)
+	return user, nil
 }
