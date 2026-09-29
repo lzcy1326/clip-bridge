@@ -174,7 +174,7 @@ Codex 每完成一个 MVP 后，在这里更新状态。
 [x] MVP-03 文本历史持久化
 [x] MVP-04 历史列表 UI
 [x] MVP-05 历史搜索
-[ ] MVP-06 Ctrl + ` 呼出
+[x] MVP-06 Ctrl + ` 呼出
 [ ] MVP-07 文本快速粘贴闭环
 [ ] MVP-08 本地图片 Clipboard
 [ ] MVP-09 图片快速粘贴
