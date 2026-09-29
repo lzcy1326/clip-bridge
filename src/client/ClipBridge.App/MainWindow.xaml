@@ -9,6 +9,7 @@
         Background="#F4F6F8">
     <Window.Resources>
         <app:HistorySequenceNumberConverter x:Key="HistorySequenceNumberConverter" />
+        <app:HistoryPreviewTextConverter x:Key="HistoryPreviewTextConverter" />
     </Window.Resources>
     <Grid Margin="8">
         <Grid.RowDefinitions>
@@ -45,7 +46,7 @@
                     <ListBox.ItemContainerStyle>
                         <Style TargetType="ListBoxItem">
                             <Setter Property="Padding" Value="4,0" />
-                            <Setter Property="MinHeight" Value="34" />
+                            <Setter Property="Height" Value="34" />
                             <Setter Property="HorizontalContentAlignment" Value="Stretch" />
                             <Setter Property="VerticalContentAlignment" Value="Stretch" />
                             <Setter Property="BorderBrush" Value="#E2E6EA" />
@@ -76,9 +77,13 @@
                                              MaxWidth="440" Background="#FFFFFF"
                                              BorderBrush="#C8D2DC" Padding="12">
                                         <StackPanel>
-                                            <TextBlock Text="{Binding TextContent}" MaxWidth="410" MaxHeight="120"
-                                                       TextWrapping="Wrap" TextTrimming="CharacterEllipsis"
-                                                       FontSize="13" Foreground="#263442" />
+                                            <ScrollViewer MaxHeight="420"
+                                                          VerticalScrollBarVisibility="Auto"
+                                                          HorizontalScrollBarVisibility="Disabled">
+                                                <TextBlock Text="{Binding TextContent}" MaxWidth="410"
+                                                           TextWrapping="Wrap"
+                                                           FontSize="13" Foreground="#263442" />
+                                            </ScrollViewer>
                                             <Separator Margin="0,8" />
                                             <Grid>
                                                 <Grid.ColumnDefinitions>
@@ -112,7 +117,8 @@
                                            FontSize="11" Foreground="#8493A0" />
                                 <Border Grid.Column="1" Width="1"
                                         Background="#D5DCE2" VerticalAlignment="Stretch" />
-                                <TextBlock Grid.Column="2" Text="{Binding TextContent}"
+                                <TextBlock Grid.Column="2"
+                                           Text="{Binding TextContent, Converter={StaticResource HistoryPreviewTextConverter}}"
                                            Margin="8,0,2,0"
                                            VerticalAlignment="Center"
                                            TextTrimming="CharacterEllipsis"

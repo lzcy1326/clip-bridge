@@ -236,6 +236,14 @@ L2: N/A
 L3: NOT YET
 ```
 
+MVP-04 大段文本显示修正：
+
+```text
+L0 Build: PASS（Release 构建成功，0 警告、0 错误）
+Unit Test: PASS（两行截断、换行格式、短文本保留，7/7）
+L1: PASS（用户确认固定行高、两行预览、Tooltip 可滚动查看完整文本）
+```
+
 MVP-05 验证记录：
 
 ```text
