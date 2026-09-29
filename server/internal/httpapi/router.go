@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"clipbridge/server/internal/auth"
+	"clipbridge/server/internal/clipboard"
 	"clipbridge/server/internal/device"
 	"github.com/gin-gonic/gin"
 )
@@ -26,6 +27,10 @@ type AccessTokenVerifier interface {
 
 type DeviceRegistrar interface {
 	Register(ctx context.Context, userID int64, registration device.Registration) (device.Device, error)
+}
+
+type ClipUploader interface {
+	UploadText(ctx context.Context, userID int64, upload clipboard.TextUpload) (clipboard.TextClip, bool, error)
 }
 
 const (
@@ -78,7 +83,7 @@ func (limiter *loginLimiter) allow(remoteAddress string) bool {
 	return true
 }
 
-func NewRouter(loginService LoginService, tokenVerifier AccessTokenVerifier, deviceRegistrar DeviceRegistrar) *gin.Engine {
+func NewRouter(loginService LoginService, tokenVerifier AccessTokenVerifier, deviceRegistrar DeviceRegistrar, clipUploader ClipUploader) *gin.Engine {
 	router := gin.New()
 	router.Use(gin.Logger(), gin.Recovery())
 	router.GET("/health", func(context *gin.Context) {
@@ -168,6 +173,57 @@ func NewRouter(loginService LoginService, tokenVerifier AccessTokenVerifier, dev
 			return
 		}
 		context.JSON(http.StatusCreated, registered)
+	})
+	router.POST("/api/v1/clips", func(context *gin.Context) {
+		context.Header("Cache-Control", "no-store")
+		token, ok := parseBearerToken(context.GetHeader("Authorization"))
+		if !ok || tokenVerifier == nil {
+			context.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+			return
+		}
+		userID, err := tokenVerifier.UserIDFromToken(token)
+		if err != nil || userID <= 0 {
+			context.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+			return
+		}
+		if clipUploader == nil {
+			context.JSON(http.StatusServiceUnavailable, gin.H{"error": "service_unavailable"})
+			return
+		}
+		context.Request.Body = http.MaxBytesReader(context.Writer, context.Request.Body, clipboard.MaxUploadBodyBytes)
+		decoder := json.NewDecoder(context.Request.Body)
+		decoder.DisallowUnknownFields()
+		var upload clipboard.TextUpload
+		if err := decoder.Decode(&upload); err != nil {
+			context.JSON(http.StatusBadRequest, gin.H{"error": "invalid_request"})
+			return
+		}
+		if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+			context.JSON(http.StatusBadRequest, gin.H{"error": "invalid_request"})
+			return
+		}
+		uploaded, duplicate, err := clipUploader.UploadText(context.Request.Context(), userID, upload)
+		if errors.Is(err, clipboard.ErrInvalidTextUpload) {
+			context.JSON(http.StatusBadRequest, gin.H{"error": "invalid_request"})
+			return
+		}
+		if errors.Is(err, clipboard.ErrDeviceUnavailable) {
+			context.JSON(http.StatusForbidden, gin.H{"error": "device_unavailable"})
+			return
+		}
+		if errors.Is(err, clipboard.ErrClipConflict) {
+			context.JSON(http.StatusConflict, gin.H{"error": "clip_conflict"})
+			return
+		}
+		if err != nil {
+			context.JSON(http.StatusInternalServerError, gin.H{"error": "internal_error"})
+			return
+		}
+		status := http.StatusCreated
+		if duplicate {
+			status = http.StatusOK
+		}
+		context.JSON(status, uploaded)
 	})
 	return router
 }

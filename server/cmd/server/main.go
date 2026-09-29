@@ -12,6 +12,7 @@ import (
 
 	"clipbridge/server/internal/accounts"
 	"clipbridge/server/internal/auth"
+	"clipbridge/server/internal/clipboard"
 	"clipbridge/server/internal/device"
 	"clipbridge/server/internal/httpapi"
 )
@@ -54,9 +55,24 @@ func main() {
 		startupCancel()
 		log.Fatalf("ensure device schema: %v", err)
 	}
+	clipboardStore, err := clipboard.Open(startupContext, databaseURL)
+	if err != nil {
+		deviceStore.Close()
+		store.Close()
+		startupCancel()
+		log.Fatalf("open clipboard store: %v", err)
+	}
+	if err := clipboardStore.EnsureSchema(startupContext); err != nil {
+		clipboardStore.Close()
+		deviceStore.Close()
+		store.Close()
+		startupCancel()
+		log.Fatalf("ensure clipboard schema: %v", err)
+	}
 	startupCancel()
 	defer store.Close()
 	defer deviceStore.Close()
+	defer clipboardStore.Close()
 
 	address := os.Getenv("CLIPBRIDGE_SERVER_ADDR")
 	if address == "" {
@@ -65,7 +81,7 @@ func main() {
 
 	server := &http.Server{
 		Addr:              address,
-		Handler:           httpapi.NewRouter(loginService, loginService, deviceStore),
+		Handler:           httpapi.NewRouter(loginService, loginService, deviceStore, clipboardStore),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 

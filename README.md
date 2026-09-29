@@ -196,7 +196,9 @@ Codex 每完成一个 MVP 后，在这里更新状态。
 [x] MVP-13 设备注册
     L0: PASS（JWT 签名/过期校验、设备字段校验、未授权和伪造 user_id 拒绝测试；Go 全量测试与构建通过）
     L1: PASS（本机登录后注册设备返回 201；PostgreSQL 设备归属与令牌用户一致；无令牌返回 401，客户端 user_id 返回 400）
-[ ] MVP-14 文本上传 Server
+[x] MVP-14 文本上传 Server
+    L0: PASS（文本校验、SHA-256、认证、设备归属、伪造 user_id、幂等重试、请求体上限测试；Go 全量测试与构建通过）
+    L1: PASS（本机 Compose 登录并注册设备后上传返回 201；相同 ID 重试返回 200，数据库仅一条；无令牌 401、未知设备 403、伪造 user_id 400）
 [ ] MVP-15 第二设备拉取历史
 [ ] MVP-16 WebSocket 实时通知
 [ ] MVP-17 断线补偿
@@ -315,6 +317,16 @@ L0 Unit Test: PASS（Access Token 签名与有效期校验、设备元数据标�
 L0 Build: PASS（Go 全量构建；Docker 镜像构建成功）
 L1: PASS（本机 Compose 实测登录并注册 Windows 设备；HTTP 201，数据库 user_id 与 Access Token 的 sub 对应用户一致；无令牌 HTTP 401，伪造 user_id HTTP 400）
 范围：完成 POST /api/v1/devices；设备列表、修改、删除留待后续场景。
+```
+
+MVP-14 验证记录：
+
+```text
+L0 Unit Test: PASS（文本/UUID/设备 ID 校验、内容 SHA-256、Bearer 认证、用户归属来自 Token、伪造 user_id 拒绝、重复上传幂等、冲突与未知设备状态映射、请求体上限与 JSON 格式校验）
+L0 Build: PASS（Go 全量构建；Docker 镜像构建成功）
+L1: PASS（本机 Compose 登录并注册设备；文本上传 HTTP 201；相同 clip ID 重试 HTTP 200；PostgreSQL 只有一条对应记录且 origin_device_id 正确；无令牌 HTTP 401、未知设备 HTTP 403、伪造 user_id HTTP 400；/health 正常）
+接口：POST /api/v1/clips，接收 id、device_id、text；兼容本地仓储使用的 32 位无连字符 GUID；user_id 来自 Access Token。服务端按 SHA-256(TEXT + NFC(text)) 计算内容哈希，保留原始文本；同 ID 同内容重试幂等，不同内容复用 ID 返回 HTTP 409。
+范围：完成文本上传到 Server；历史拉取、实时通知、断线补偿与图片上传留待后续 MVP。
 ```
 
 不要手工勾选未验证场景。
