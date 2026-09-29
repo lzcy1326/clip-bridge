@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"clipbridge/server/internal/accounts"
@@ -17,6 +18,7 @@ import (
 const accessTokenLifetime = 15 * time.Minute
 
 var ErrInvalidCredentials = errors.New("invalid credentials")
+var ErrInvalidAccessToken = errors.New("invalid access token")
 
 type UserStore interface {
 	Authenticate(ctx context.Context, username, password string) (accounts.AuthenticatedUser, error)
@@ -88,6 +90,58 @@ func (service *Service) Login(ctx context.Context, username, password string) (L
 			DisplayName: user.DisplayName,
 		},
 	}, nil
+}
+
+func (service *Service) UserIDFromToken(token string) (int64, error) {
+	return UserIDFromAccessToken(token, service.secret, service.now())
+}
+
+func UserIDFromAccessToken(token string, secret []byte, now time.Time) (int64, error) {
+	if len(secret) < 32 || len(token) == 0 || len(token) > 4096 {
+		return 0, ErrInvalidAccessToken
+	}
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 {
+		return 0, ErrInvalidAccessToken
+	}
+
+	mac := hmac.New(sha256.New, secret)
+	if _, err := mac.Write([]byte(parts[0] + "." + parts[1])); err != nil {
+		return 0, ErrInvalidAccessToken
+	}
+	signature, err := base64.RawURLEncoding.DecodeString(parts[2])
+	if err != nil || !hmac.Equal(signature, mac.Sum(nil)) {
+		return 0, ErrInvalidAccessToken
+	}
+
+	headerJSON, err := base64.RawURLEncoding.DecodeString(parts[0])
+	if err != nil {
+		return 0, ErrInvalidAccessToken
+	}
+	var header struct {
+		Algorithm string `json:"alg"`
+		Type      string `json:"typ"`
+	}
+	if err := json.Unmarshal(headerJSON, &header); err != nil || header.Algorithm != "HS256" || header.Type != "JWT" {
+		return 0, ErrInvalidAccessToken
+	}
+
+	claimsJSON, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return 0, ErrInvalidAccessToken
+	}
+	var claims accessClaims
+	if err := json.Unmarshal(claimsJSON, &claims); err != nil || claims.Issuer != "clipbridge" {
+		return 0, ErrInvalidAccessToken
+	}
+	if claims.IssuedAt <= 0 || claims.Expires <= now.Unix() || claims.Expires <= claims.IssuedAt || claims.Expires-claims.IssuedAt > int64(accessTokenLifetime.Seconds()) || claims.IssuedAt > now.Add(30*time.Second).Unix() {
+		return 0, ErrInvalidAccessToken
+	}
+	userID, err := strconv.ParseInt(claims.Subject, 10, 64)
+	if err != nil || userID <= 0 {
+		return 0, ErrInvalidAccessToken
+	}
+	return userID, nil
 }
 
 func (service *Service) sign(claims accessClaims) (string, error) {

@@ -66,6 +66,21 @@ func TestLoginIssuesSignedShortLivedAccessToken(t *testing.T) {
 	if claims.Issuer != "clipbridge" || claims.Subject != "7" || claims.IssuedAt != now.Unix() || claims.Expires != now.Add(15*time.Minute).Unix() {
 		t.Fatalf("unexpected claims: %+v", claims)
 	}
+	userID, err := service.UserIDFromToken(result.AccessToken)
+	if err != nil || userID != 7 {
+		t.Fatalf("UserIDFromToken() = %d, %v; want 7, nil", userID, err)
+	}
+	if _, err := UserIDFromAccessToken(result.AccessToken, secret, now.Add(16*time.Minute)); !errors.Is(err, ErrInvalidAccessToken) {
+		t.Fatalf("expired token error = %v, want ErrInvalidAccessToken", err)
+	}
+	if _, err := UserIDFromAccessToken(result.AccessToken, []byte(strings.Repeat("x", 32)), now); !errors.Is(err, ErrInvalidAccessToken) {
+		t.Fatalf("wrong-secret token error = %v, want ErrInvalidAccessToken", err)
+	}
+	parts = strings.Split(result.AccessToken, ".")
+	tampered := parts[0] + "." + parts[1] + "A." + parts[2]
+	if _, err := UserIDFromAccessToken(tampered, secret, now); !errors.Is(err, ErrInvalidAccessToken) {
+		t.Fatalf("tampered token error = %v, want ErrInvalidAccessToken", err)
+	}
 }
 
 func TestLoginHidesInvalidCredentials(t *testing.T) {

@@ -193,7 +193,9 @@ Codex 每完成一个 MVP 后，在这里更新状态。
 [x] MVP-12 用户登录
     L0: PASS（Argon2id 密码核验、JWT 签名与声明、统一凭据错误、请求体限制及 IP 限流测试；Go 全量测试与构建通过）
     L1: PASS（本机 Compose 服务中，测试账号登录返回 15 分钟 Bearer Token；错误密码、未知及禁用账号均返回 401；健康检查正常）
-[ ] MVP-13 设备注册
+[x] MVP-13 设备注册
+    L0: PASS（JWT 签名/过期校验、设备字段校验、未授权和伪造 user_id 拒绝测试；Go 全量测试与构建通过）
+    L1: PASS（本机登录后注册设备返回 201；PostgreSQL 设备归属与令牌用户一致；无令牌返回 401，客户端 user_id 返回 400）
 [ ] MVP-14 文本上传 Server
 [ ] MVP-15 第二设备拉取历史
 [ ] MVP-16 WebSocket 实时通知
@@ -304,6 +306,15 @@ L0 Build: PASS（Go 全量构建及 Docker 镜像构建成功）
 L1: PASS（本机登录 API 实测成功；错误密码、未知用户及禁用用户统一返回 HTTP 401；`/health` 正常）
 Access Token: HS256，15 分钟有效；刷新令牌留待后续 MVP。
 本机密钥通过 `.env` 的 `CLIPBRIDGE_JWT_SECRET` 配置，要求至少 32 字节；`.env` 已忽略，`.env.example` 只含占位值。
+```
+
+MVP-13 验证记录：
+
+```text
+L0 Unit Test: PASS（Access Token 签名与有效期校验、设备元数据标准化与边界校验、Bearer 认证、伪造 user_id 拒绝、未认证请求拒绝）
+L0 Build: PASS（Go 全量构建；Docker 镜像构建成功）
+L1: PASS（本机 Compose 实测登录并注册 Windows 设备；HTTP 201，数据库 user_id 与 Access Token 的 sub 对应用户一致；无令牌 HTTP 401，伪造 user_id HTTP 400）
+范围：完成 POST /api/v1/devices；设备列表、修改、删除留待后续场景。
 ```
 
 不要手工勾选未验证场景。

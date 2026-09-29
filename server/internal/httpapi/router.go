@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -10,14 +11,21 @@ import (
 	"sync"
 	"time"
 
-	"context"
-
 	"clipbridge/server/internal/auth"
+	"clipbridge/server/internal/device"
 	"github.com/gin-gonic/gin"
 )
 
 type LoginService interface {
 	Login(ctx context.Context, username, password string) (auth.LoginResult, error)
+}
+
+type AccessTokenVerifier interface {
+	UserIDFromToken(token string) (int64, error)
+}
+
+type DeviceRegistrar interface {
+	Register(ctx context.Context, userID int64, registration device.Registration) (device.Device, error)
 }
 
 const (
@@ -70,7 +78,7 @@ func (limiter *loginLimiter) allow(remoteAddress string) bool {
 	return true
 }
 
-func NewRouter(loginService LoginService) *gin.Engine {
+func NewRouter(loginService LoginService, tokenVerifier AccessTokenVerifier, deviceRegistrar DeviceRegistrar) *gin.Engine {
 	router := gin.New()
 	router.Use(gin.Logger(), gin.Recovery())
 	router.GET("/health", func(context *gin.Context) {
@@ -118,5 +126,56 @@ func NewRouter(loginService LoginService) *gin.Engine {
 		}
 		context.JSON(http.StatusOK, result)
 	})
+	router.POST("/api/v1/devices", func(context *gin.Context) {
+		context.Header("Cache-Control", "no-store")
+		token, ok := parseBearerToken(context.GetHeader("Authorization"))
+		if !ok || tokenVerifier == nil {
+			context.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+			return
+		}
+		userID, err := tokenVerifier.UserIDFromToken(token)
+		if err != nil || userID <= 0 {
+			context.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+			return
+		}
+		if deviceRegistrar == nil {
+			context.JSON(http.StatusServiceUnavailable, gin.H{"error": "service_unavailable"})
+			return
+		}
+		context.Request.Body = http.MaxBytesReader(context.Writer, context.Request.Body, 8*1024)
+		decoder := json.NewDecoder(context.Request.Body)
+		decoder.DisallowUnknownFields()
+		var registration device.Registration
+		if err := decoder.Decode(&registration); err != nil {
+			context.JSON(http.StatusBadRequest, gin.H{"error": "invalid_request"})
+			return
+		}
+		if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+			context.JSON(http.StatusBadRequest, gin.H{"error": "invalid_request"})
+			return
+		}
+		registered, err := deviceRegistrar.Register(context.Request.Context(), userID, registration)
+		if errors.Is(err, device.ErrInvalidRegistration) {
+			context.JSON(http.StatusBadRequest, gin.H{"error": "invalid_request"})
+			return
+		}
+		if errors.Is(err, device.ErrUserUnavailable) {
+			context.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+			return
+		}
+		if err != nil {
+			context.JSON(http.StatusInternalServerError, gin.H{"error": "internal_error"})
+			return
+		}
+		context.JSON(http.StatusCreated, registered)
+	})
 	return router
+}
+
+func parseBearerToken(header string) (string, bool) {
+	parts := strings.Fields(header)
+	if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") || len(parts[1]) > 4096 {
+		return "", false
+	}
+	return parts[1], true
 }

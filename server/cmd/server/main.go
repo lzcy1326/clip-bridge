@@ -12,6 +12,7 @@ import (
 
 	"clipbridge/server/internal/accounts"
 	"clipbridge/server/internal/auth"
+	"clipbridge/server/internal/device"
 	"clipbridge/server/internal/httpapi"
 )
 
@@ -36,12 +37,26 @@ func main() {
 		log.Fatalf("ensure account schema: %v", err)
 	}
 	loginService, err := auth.NewService(store, []byte(jwtSecret))
-	startupCancel()
 	if err != nil {
 		store.Close()
+		startupCancel()
 		log.Fatalf("configure authentication: %v", err)
 	}
+	deviceStore, err := device.Open(startupContext, databaseURL)
+	if err != nil {
+		store.Close()
+		startupCancel()
+		log.Fatalf("open device store: %v", err)
+	}
+	if err := deviceStore.EnsureSchema(startupContext); err != nil {
+		deviceStore.Close()
+		store.Close()
+		startupCancel()
+		log.Fatalf("ensure device schema: %v", err)
+	}
+	startupCancel()
 	defer store.Close()
+	defer deviceStore.Close()
 
 	address := os.Getenv("CLIPBRIDGE_SERVER_ADDR")
 	if address == "" {
@@ -50,7 +65,7 @@ func main() {
 
 	server := &http.Server{
 		Addr:              address,
-		Handler:           httpapi.NewRouter(loginService),
+		Handler:           httpapi.NewRouter(loginService, loginService, deviceStore),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
