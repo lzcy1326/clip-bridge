@@ -12,6 +12,7 @@ public sealed class ClipboardMonitor : IDisposable
     private readonly Window _window;
     private HwndSource? _source;
     private nint _windowHandle;
+    private string? _suppressedText;
     private bool _isRegistered;
     private bool _isDisposed;
 
@@ -32,6 +33,20 @@ public sealed class ClipboardMonitor : IDisposable
     public event Action? ClipboardReadFailed;
 
     public event Action<Exception>? ListenerFailed;
+
+    public void SuppressTextCapture(string text)
+    {
+        ArgumentNullException.ThrowIfNull(text);
+        _suppressedText = text;
+    }
+
+    public void CancelTextCaptureSuppression(string text)
+    {
+        if (string.Equals(_suppressedText, text, StringComparison.Ordinal))
+        {
+            _suppressedText = null;
+        }
+    }
 
     public void Dispose()
     {
@@ -98,7 +113,18 @@ public sealed class ClipboardMonitor : IDisposable
         {
             if (Clipboard.ContainsText())
             {
-                TextCaptured?.Invoke(Clipboard.GetText());
+                var text = Clipboard.GetText();
+                if (_suppressedText is not null)
+                {
+                    var shouldSuppress = string.Equals(_suppressedText, text, StringComparison.Ordinal);
+                    _suppressedText = null;
+                    if (shouldSuppress)
+                    {
+                        return;
+                    }
+                }
+
+                TextCaptured?.Invoke(text);
             }
         }
         catch (ExternalException)
@@ -107,7 +133,13 @@ public sealed class ClipboardMonitor : IDisposable
         }
     }
 
-    private void OnWindowClosing(object? sender, CancelEventArgs e) => Dispose();
+    private void OnWindowClosing(object? sender, CancelEventArgs e)
+    {
+        if (!e.Cancel)
+        {
+            Dispose();
+        }
+    }
 
     [DllImport("user32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]

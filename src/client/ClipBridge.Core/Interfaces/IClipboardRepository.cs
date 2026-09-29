@@ -13,4 +13,6 @@ public interface IClipboardRepository
     IReadOnlyList<ClipboardItem> SearchTextItems(string query, int limit);
 
     ClipboardItem? FindById(string id);
+
+    bool MarkUsed(string id);
 }

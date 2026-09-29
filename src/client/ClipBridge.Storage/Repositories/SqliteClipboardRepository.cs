@@ -136,10 +136,10 @@ public sealed class SqliteClipboardRepository : IClipboardRepository
         using var connection = OpenConnection();
         using var command = connection.CreateCommand();
         command.CommandText = """
-            SELECT id, origin_device_id, type, text_content, image_path, content_hash, created_at, synced, remote
+            SELECT id, origin_device_id, type, text_content, image_path, content_hash, created_at, synced, remote, last_used_at
             FROM clipboard_items
             WHERE type = $type
-            ORDER BY created_at DESC, rowid DESC
+            ORDER BY MAX(created_at, COALESCE(last_used_at, created_at)) DESC, rowid DESC
             LIMIT $limit;
             """;
         command.Parameters.AddWithValue("$type", TextTypeName);
@@ -177,10 +177,10 @@ public sealed class SqliteClipboardRepository : IClipboardRepository
         using var connection = OpenConnection();
         using var command = connection.CreateCommand();
         command.CommandText = """
-            SELECT id, origin_device_id, type, text_content, image_path, content_hash, created_at, synced, remote
+            SELECT id, origin_device_id, type, text_content, image_path, content_hash, created_at, synced, remote, last_used_at
             FROM clipboard_items
             WHERE type = $type AND text_content LIKE $query ESCAPE '\'
-            ORDER BY created_at DESC, rowid DESC
+            ORDER BY MAX(created_at, COALESCE(last_used_at, created_at)) DESC, rowid DESC
             LIMIT $limit;
             """;
         command.Parameters.AddWithValue("$type", TextTypeName);
@@ -208,7 +208,7 @@ public sealed class SqliteClipboardRepository : IClipboardRepository
         using var connection = OpenConnection();
         using var command = connection.CreateCommand();
         command.CommandText = """
-            SELECT id, origin_device_id, type, text_content, image_path, content_hash, created_at, synced, remote
+            SELECT id, origin_device_id, type, text_content, image_path, content_hash, created_at, synced, remote, last_used_at
             FROM clipboard_items
             WHERE id = $id;
             """;
@@ -221,6 +221,30 @@ public sealed class SqliteClipboardRepository : IClipboardRepository
         }
 
         return ReadClipboardItem(reader);
+    }
+
+    public bool MarkUsed(string id)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(id);
+
+        using var connection = OpenConnection();
+        using var transaction = connection.BeginTransaction();
+        using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            UPDATE clipboard_items
+            SET last_used_at = MAX(
+                $now,
+                COALESCE((SELECT MAX(MAX(created_at, COALESCE(last_used_at, created_at))) + 1 FROM clipboard_items), $now),
+                COALESCE((SELECT MAX(created_at, COALESCE(last_used_at, created_at)) + 1 FROM clipboard_items WHERE id = $id), $now))
+            WHERE id = $id AND type = $type;
+            """;
+        command.Parameters.AddWithValue("$now", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+        command.Parameters.AddWithValue("$id", id);
+        command.Parameters.AddWithValue("$type", TextTypeName);
+        var updated = command.ExecuteNonQuery() == 1;
+        transaction.Commit();
+        return updated;
     }
 
     private void InitializeDatabase()
@@ -237,13 +261,34 @@ public sealed class SqliteClipboardRepository : IClipboardRepository
                 content_hash TEXT NOT NULL,
                 created_at INTEGER NOT NULL,
                 synced INTEGER NOT NULL DEFAULT 0,
-                remote INTEGER NOT NULL DEFAULT 0
+                remote INTEGER NOT NULL DEFAULT 0,
+                last_used_at INTEGER NULL
             );
             CREATE INDEX IF NOT EXISTS ix_clipboard_items_created_at
                 ON clipboard_items (created_at DESC);
             """;
         command.ExecuteNonQuery();
+        EnsureLastUsedColumn(connection);
         RemoveInvalidAndDuplicateTextItems(connection);
+    }
+
+    private static void EnsureLastUsedColumn(SqliteConnection connection)
+    {
+        using var columnsCommand = connection.CreateCommand();
+        columnsCommand.CommandText = "PRAGMA table_info(clipboard_items);";
+        using var reader = columnsCommand.ExecuteReader();
+        while (reader.Read())
+        {
+            if (string.Equals(reader.GetString(1), "last_used_at", StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+        }
+
+        reader.Close();
+        using var alterCommand = connection.CreateCommand();
+        alterCommand.CommandText = "ALTER TABLE clipboard_items ADD COLUMN last_used_at INTEGER NULL;";
+        alterCommand.ExecuteNonQuery();
     }
 
     private static void RemoveInvalidAndDuplicateTextItems(SqliteConnection connection)
@@ -305,7 +350,8 @@ public sealed class SqliteClipboardRepository : IClipboardRepository
         reader.GetString(5),
         reader.GetInt64(6),
         reader.GetInt32(7) != 0,
-        reader.GetInt32(8) != 0);
+        reader.GetInt32(8) != 0,
+        reader.IsDBNull(9) ? null : reader.GetInt64(9));
 
     private static string ComputeContentHash(string normalizedText) => Convert.ToHexString(
         SHA256.HashData(Encoding.UTF8.GetBytes(TextTypeName + normalizedText)))

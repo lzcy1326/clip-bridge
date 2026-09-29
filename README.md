@@ -175,7 +175,9 @@ Codex 每完成一个 MVP 后，在这里更新状态。
 [x] MVP-04 历史列表 UI
 [x] MVP-05 历史搜索
 [x] MVP-06 Ctrl + ` 呼出
-[ ] MVP-07 文本快速粘贴闭环
+[x] MVP-07 文本快速粘贴闭环
+    L0: PASS（23 项测试；成功粘贴后历史记录置顶，保留原复制时间）
+    L1: PASS（用户确认单窗、光标处打开、回车粘贴并置顶、Esc 关闭无闪现，复制监听正常）
 [ ] MVP-08 本地图片 Clipboard
 [ ] MVP-09 图片快速粘贴
 [ ] MVP-10 Server + PostgreSQL 启动

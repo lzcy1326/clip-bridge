@@ -52,6 +52,12 @@ internal sealed class TrayIconService : IDisposable
                 return;
             }
 
+            if (window is MainWindow mainWindow)
+            {
+                mainWindow.ShowHistoryWindow();
+                return;
+            }
+
             window.Show();
             window.WindowState = WindowState.Normal;
             window.Activate();

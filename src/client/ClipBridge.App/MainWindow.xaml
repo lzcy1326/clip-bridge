@@ -6,7 +6,9 @@
         Icon="pack://application:,,,/ClipBridge.App;component/Assets/Icons/clipbridge.ico"
         MinHeight="360" MinWidth="420"
         WindowStartupLocation="CenterScreen"
-        Background="#F4F6F8">
+        Background="#F4F6F8"
+        PreviewKeyDown="Window_PreviewKeyDown"
+        Closing="MainWindow_Closing">
     <Window.Resources>
         <app:HistorySequenceNumberConverter x:Key="HistorySequenceNumberConverter" />
         <app:HistoryPreviewTextConverter x:Key="HistoryPreviewTextConverter" />
@@ -42,7 +44,9 @@
                          Background="Transparent"
                          ScrollViewer.CanContentScroll="True"
                          VirtualizingPanel.IsVirtualizing="True"
-                         VirtualizingPanel.VirtualizationMode="Recycling">
+                         VirtualizingPanel.VirtualizationMode="Recycling"
+                         SelectionChanged="HistoryList_SelectionChanged"
+                         MouseDoubleClick="HistoryList_MouseDoubleClick">
                     <ListBox.ItemContainerStyle>
                         <Style TargetType="ListBoxItem">
                             <Setter Property="Padding" Value="4,0" />
@@ -93,6 +97,7 @@
                                                 <Grid.RowDefinitions>
                                                     <RowDefinition Height="Auto" />
                                                     <RowDefinition Height="Auto" />
+                                                    <RowDefinition Height="Auto" />
                                                 </Grid.RowDefinitions>
                                                 <TextBlock Text="复制时间" FontSize="11" Foreground="#71808D" />
                                                 <TextBlock Grid.Column="1"
@@ -103,6 +108,11 @@
                                                 <TextBlock Grid.Row="1" Grid.Column="1"
                                                            Text="{Binding OriginDeviceId}" Margin="0,4,0,0"
                                                            FontSize="11" Foreground="#263442" />
+                                                <TextBlock Grid.Row="2" Text="最近使用" Margin="0,4,0,0"
+                                                           FontSize="11" Foreground="#71808D" />
+                                                <TextBlock Grid.Row="2" Grid.Column="1"
+                                                           Text="{Binding LastUsedAt, StringFormat='{}{0:yyyy-MM-dd HH:mm:ss}', TargetNullValue=未使用}"
+                                                           Margin="0,4,0,0" FontSize="11" Foreground="#263442" />
                                             </Grid>
                                         </StackPanel>
                                     </ToolTip>

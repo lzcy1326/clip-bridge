@@ -140,6 +140,74 @@ public sealed class SqliteClipboardRepositoryTests : IDisposable
     }
 
     [Fact]
+    public void MarkUsed_MovesItemToTopAndPreservesCopyMetadata()
+    {
+        var repository = new SqliteClipboardRepository(DatabasePath);
+        var usedItem = repository.AddText("older item", "device-a");
+        Assert.NotNull(usedItem);
+        repository.AddText("newer item", "device-b");
+
+        var marked = repository.MarkUsed(usedItem.Id);
+        var recent = repository.GetRecentTextItems(10);
+        var restored = repository.FindById(usedItem.Id);
+
+        Assert.True(marked);
+        Assert.Equal(usedItem.Id, recent[0].Id);
+        Assert.Equal(usedItem.CreatedAtUnixMilliseconds, restored!.CreatedAtUnixMilliseconds);
+        Assert.Equal("device-a", restored.OriginDeviceId);
+        Assert.NotNull(restored.LastUsedAtUnixMilliseconds);
+        Assert.True(restored.LastUsedAtUnixMilliseconds > usedItem.CreatedAtUnixMilliseconds);
+        Assert.False(restored.Synced);
+        Assert.False(restored.Remote);
+    }
+
+    [Fact]
+    public void MarkUsed_ReturnsFalseForMissingItem()
+    {
+        var repository = new SqliteClipboardRepository(DatabasePath);
+
+        Assert.False(repository.MarkUsed("missing"));
+    }
+
+    [Fact]
+    public void Constructor_AddsLastUsedColumnToExistingDatabase()
+    {
+        Directory.CreateDirectory(_directory);
+        using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = DatabasePath,
+            Mode = SqliteOpenMode.ReadWriteCreate
+        }.ToString()))
+        {
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = """
+                CREATE TABLE clipboard_items (
+                    id TEXT PRIMARY KEY,
+                    origin_device_id TEXT NOT NULL,
+                    type TEXT NOT NULL,
+                    text_content TEXT,
+                    image_path TEXT,
+                    content_hash TEXT NOT NULL,
+                    created_at INTEGER NOT NULL,
+                    synced INTEGER NOT NULL DEFAULT 0,
+                    remote INTEGER NOT NULL DEFAULT 0
+                );
+                INSERT INTO clipboard_items VALUES ('existing', 'local', 'TEXT', 'existing text', NULL, 'hash', 123, 0, 0);
+                """;
+            command.ExecuteNonQuery();
+        }
+
+        var repository = new SqliteClipboardRepository(DatabasePath);
+        var existing = repository.FindById("existing");
+
+        Assert.NotNull(existing);
+        Assert.Null(existing.LastUsedAtUnixMilliseconds);
+        Assert.True(repository.MarkUsed(existing.Id));
+        Assert.NotNull(repository.FindById(existing.Id)!.LastUsedAtUnixMilliseconds);
+    }
+
+    [Fact]
     public void Constructor_RemovesExistingBlankAndDuplicateRecordsKeepingNewestCopy()
     {
         Directory.CreateDirectory(_directory);
