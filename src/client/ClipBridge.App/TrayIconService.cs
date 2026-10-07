@@ -14,7 +14,7 @@ internal sealed class TrayIconService : IDisposable
     public TrayIconService()
     {
         var iconResource = WpfApplication.GetResourceStream(new Uri(
-            "pack://application:,,,/ClipBridge.App;component/Assets/Icons/clipbridge.ico",
+            "pack://application:,,,/ClipBridge;component/Assets/Icons/clipbridge.ico",
             UriKind.Absolute)) ?? throw new InvalidOperationException("The ClipBridge icon resource is unavailable.");
         using (iconResource.Stream)
         {

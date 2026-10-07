@@ -34,7 +34,17 @@ func HashPassword(password string) (string, error) {
 	if len(password) < 12 || len(password) > 1024 {
 		return "", fmt.Errorf("password must be between 12 and 1024 bytes")
 	}
+	return hashPassword(password)
+}
 
+func hashBootstrapPassword(password string) (string, error) {
+	if len(password) == 0 || len(password) > 1024 {
+		return "", fmt.Errorf("bootstrap password must be between 1 and 1024 bytes")
+	}
+	return hashPassword(password)
+}
+
+func hashPassword(password string) (string, error) {
 	salt := make([]byte, argonSaltLength)
 	if _, err := rand.Read(salt); err != nil {
 		return "", fmt.Errorf("generate password salt: %w", err)

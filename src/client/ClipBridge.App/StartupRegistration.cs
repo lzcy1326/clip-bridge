@@ -33,7 +33,7 @@ internal static class StartupRegistration
 
     private static string GetCommand()
     {
-        var appPath = Path.Combine(AppContext.BaseDirectory, "ClipBridge.App.exe");
+        var appPath = Path.Combine(AppContext.BaseDirectory, "ClipBridge.exe");
         if (!File.Exists(appPath))
         {
             appPath = Environment.ProcessPath

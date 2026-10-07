@@ -4,7 +4,7 @@
         xmlns:app="clr-namespace:ClipBridge.App"
         xmlns:core="clr-namespace:ClipBridge.Core.Models;assembly=ClipBridge.Core"
         Title="ClipBridge - 跨设备剪贴板" Height="620" Width="620"
-        Icon="pack://application:,,,/ClipBridge.App;component/Assets/Icons/clipbridge.ico"
+        Icon="pack://application:,,,/ClipBridge;component/Assets/Icons/clipbridge.ico"
         ShowInTaskbar="False"
         MinHeight="360" MinWidth="420"
         WindowStartupLocation="CenterScreen"

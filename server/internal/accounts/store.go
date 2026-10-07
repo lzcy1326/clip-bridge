@@ -84,6 +84,29 @@ RETURNING id`, normalizedUsername, passwordHash).Scan(&id)
 	return id, nil
 }
 
+func (store *Store) EnsureBootstrapAdmin(ctx context.Context, password string) (bool, error) {
+	var exists bool
+	if err := store.pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM users WHERE LOWER(username) = 'admin')`).Scan(&exists); err != nil {
+		return false, fmt.Errorf("check bootstrap admin: %w", err)
+	}
+	if exists {
+		return false, nil
+	}
+
+	passwordHash, err := hashBootstrapPassword(password)
+	if err != nil {
+		return false, err
+	}
+	result, err := store.pool.Exec(ctx, `
+INSERT INTO users (username, password_hash, display_name, role)
+VALUES ('admin', $1, 'admin', 'ADMIN')
+ON CONFLICT DO NOTHING`, passwordHash)
+	if err != nil {
+		return false, fmt.Errorf("create bootstrap admin: %w", err)
+	}
+	return result.RowsAffected() > 0, nil
+}
+
 func (store *Store) Authenticate(ctx context.Context, username, password string) (AuthenticatedUser, error) {
 	normalizedUsername, err := NormalizeUsername(username)
 	if err != nil {

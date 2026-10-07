@@ -133,13 +133,13 @@ Docker Compose
 
 ## Client 本机启动
 
-开发时可运行 WPF 项目。Windows 发布包使用自包含的单文件配置，双击发布目录中的 `ClipBridge.App.exe` 启动，不需要通过控制台版 `dotnet.exe` 加载应用。
+开发时可运行 WPF 项目。Windows 发布包使用自包含的单文件配置，双击发布目录中的 `ClipBridge.exe` 启动，不需要通过控制台版 `dotnet.exe` 加载应用。
 
 ```powershell
 dotnet publish src/client/ClipBridge.App/ClipBridge.App.csproj -p:PublishProfile=win-x64-self-contained
 ```
 
-发布文件统一位于 `artifacts/ClipBridge/ClipBridge.App.exe`。
+发布文件统一位于 `artifacts/ClipBridge/ClipBridge.exe`。
 
 ---
 

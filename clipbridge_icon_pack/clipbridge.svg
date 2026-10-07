@@ -1,59 +1,42 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" role="img" aria-label="ClipBridge icon">
-  <title>ClipBridge icon</title>
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" role="img" aria-label="ClipBridge cloud clipboard icon">
+  <title>ClipBridge cloud clipboard icon</title>
   <defs>
-    <style>
-      .bg { fill: #138BFF; }
-      .front { fill: #FFFFFF; }
-      .back { fill: #DCEBFA; }
-      .back-handle { fill: #CDE1F6; }
-      .front-handle { fill: #D4E5F8; }
-      .arrow { fill: #177DFF; }
-    </style>
+    <linearGradient id="bgBlue" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0C73FF"/>
+      <stop offset="100%" stop-color="#1889FF"/>
+    </linearGradient>
+    <linearGradient id="lineBlue" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#5DBBFF"/>
+      <stop offset="100%" stop-color="#4CADF4"/>
+    </linearGradient>
+    <linearGradient id="cloudBlue" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#4DB7FF"/>
+      <stop offset="100%" stop-color="#46ADF2"/>
+    </linearGradient>
   </defs>
 
-  <!-- Background -->
-  <rect class="bg" x="0" y="0" width="1024" height="1024" rx="140" ry="140"/>
+  <!-- outer clipboard -->
+  <path fill="url(#bgBlue)" d="M245 170h132c8-38 42-67 83-67h103c41 0 75 29 83 67h133c66 0 119 53 119 119v523c0 66-53 119-119 119H245c-66 0-119-53-119-119V289c0-66 53-119 119-119z"/>
 
-  <!-- Back clipboard -->
-  <rect class="back" x="436" y="351" width="424" height="468" rx="56" ry="56"/>
-  <rect class="back-handle" x="584" y="312" width="170" height="38" rx="19" ry="19"/>
-  <rect class="back-handle" x="511" y="292" width="212" height="62" rx="24" ry="24"/>
-  <rect class="bg" x="563" y="310" width="108" height="24" rx="12" ry="12"/>
+  <!-- paper -->
+  <rect x="204" y="270" width="617" height="548" rx="54" fill="#FFFFFF"/>
 
-  <!-- Front clipboard -->
-  <rect class="front" x="136" y="246" width="514" height="542" rx="60" ry="60"/>
-  <rect class="front-handle" x="258" y="198" width="255" height="74" rx="30" ry="30"/>
-  <rect class="front" x="203" y="150" width="314" height="94" rx="38" ry="38"/>
-  <rect class="bg" x="266" y="185" width="188" height="34" rx="17" ry="17"/>
+  <!-- notch / inner top blue area -->
+  <path fill="url(#bgBlue)" d="M346 170h334v88c0 31-25 56-56 56H402c-31 0-56-25-56-56z"/>
 
-  <!-- Upper arrow -->
-  <path class="arrow" d="M 267 542
-      C 308 450, 396 393, 504 389
-      L 504 340
-      C 504 330, 516 323, 524 330
-      L 636 441
-      C 643 448, 643 460, 636 467
-      L 524 578
-      C 516 585, 504 578, 504 568
-      L 504 518
-      C 421 518, 355 557, 316 625
-      C 299 653, 256 626, 267 542 Z"/>
+  <!-- clip head -->
+  <rect x="361" y="94" width="302" height="120" rx="43" fill="url(#bgBlue)"/>
+  <rect x="417" y="140" width="190" height="40" rx="20" fill="#FFFFFF"/>
 
-  <!-- Lower arrow -->
-  <path class="arrow" d="M 493 671
-      C 566 667, 628 632, 672 570
-      C 689 546, 727 567, 718 601
-      C 691 693, 603 744, 493 748
-      L 493 796
-      C 493 806, 481 813, 473 806
-      L 360 695
-      C 353 688, 353 676, 360 669
-      L 473 558
-      C 481 551, 493 558, 493 568
-      L 493 618
-      C 438 621, 390 644, 353 684
-      C 322 716, 279 683, 308 647
-      C 353 593, 415 560, 493 557
-      L 493 671 Z"/>
+  <!-- page lines -->
+  <rect x="274" y="416" width="434" height="72" rx="36" fill="url(#lineBlue)"/>
+  <rect x="274" y="549" width="324" height="72" rx="36" fill="url(#lineBlue)"/>
+  <rect x="274" y="682" width="178" height="72" rx="36" fill="url(#lineBlue)"/>
+
+  <!-- cloud sits on lower-right of paper -->
+  <g transform="translate(430,584)">
+    <path fill="#FFFFFF" d="M374 32c86 0 158 57 181 136 16-3 33-5 50-5 98 0 178 80 178 178s-80 178-178 178H118C53 519 0 466 0 401s53-118 118-118c20 0 39 5 56 14 26-156 104-265 200-265z"/>
+    <path fill="url(#cloudBlue)" d="M347 53c81 0 148 55 168 130 15-3 31-4 46-4 90 0 163 73 163 163s-73 163-163 163H105c-60 0-109-49-109-109s49-109 109-109c18 0 36 4 52 13 24-143 96-247 190-247z"/>
+  </g>
 </svg>

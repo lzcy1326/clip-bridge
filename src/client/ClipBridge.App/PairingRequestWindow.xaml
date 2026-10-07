@@ -8,7 +8,7 @@
         ShowActivated="True"
         Topmost="True"
         WindowStartupLocation="CenterScreen"
-        Icon="pack://application:,,,/ClipBridge.App;component/Assets/Icons/clipbridge.ico"
+        Icon="pack://application:,,,/ClipBridge;component/Assets/Icons/clipbridge.ico"
         Background="#F4F6F8">
     <Grid Margin="24">
         <Grid.RowDefinitions>

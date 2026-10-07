@@ -1,7 +1,7 @@
 #define AppName "ClipBridge"
 #define AppVersion "1.0.0"
 #define AppPublisher "ClipBridge"
-#define AppExeName "ClipBridge.App.exe"
+#define AppExeName "ClipBridge.exe"
 #define PublishDir "..\artifacts\ClipBridge"
 
 [Setup]
@@ -84,12 +84,12 @@ begin
   begin
     if Exec(
       ExpandConstant('{sys}\taskkill.exe'),
-      '/F /T /IM "ClipBridge.App.exe"',
+      '/F /T /IM "ClipBridge.exe"',
       '',
       SW_HIDE,
       ewWaitUntilTerminated,
       ResultCode) then
-      Log(Format('Stopped ClipBridge.App.exe before uninstall (exit code %d).', [ResultCode]));
+      Log(Format('Stopped ClipBridge.exe before uninstall (exit code %d).', [ResultCode]));
   end;
 
   if (CurUninstallStep = usPostUninstall) and RemovePersonalData then

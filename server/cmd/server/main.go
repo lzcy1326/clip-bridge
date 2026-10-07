@@ -37,6 +37,17 @@ func main() {
 		startupCancel()
 		log.Fatalf("ensure account schema: %v", err)
 	}
+	if bootstrapAdminPassword := os.Getenv("CLIPBRIDGE_BOOTSTRAP_ADMIN_PASSWORD"); bootstrapAdminPassword != "" {
+		created, err := store.EnsureBootstrapAdmin(startupContext, bootstrapAdminPassword)
+		if err != nil {
+			store.Close()
+			startupCancel()
+			log.Fatalf("ensure bootstrap admin: %v", err)
+		}
+		if created {
+			log.Print("created the default ADMIN account 'admin'; change the default password before exposing the server to an untrusted network")
+		}
+	}
 	loginService, err := auth.NewService(store, []byte(jwtSecret))
 	if err != nil {
 		store.Close()
