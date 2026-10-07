@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using ClipBridge.Core.Models;
 using ClipBridge.Storage.Repositories;
 using Microsoft.Data.Sqlite;
@@ -196,6 +198,133 @@ public sealed class SqliteClipboardRepositoryTests : IDisposable
     }
 
     [Fact]
+    public void AddText_WhenMatchingRemoteTextIsCopiedLocallyCreatesFreshUploadId()
+    {
+        var repository = new SqliteClipboardRepository(DatabasePath);
+        var remote = CreateRemoteTextItem("remote-id", "shared text", "HOST-PC", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+        repository.UpsertRemoteText(remote, originatedLocally: false);
+
+        var recopied = repository.AddText("shared text", "CLOUD-DEV")!;
+
+        Assert.NotEqual("remote-id", recopied.Id);
+        Assert.Equal("CLOUD-DEV", recopied.OriginDeviceId);
+        Assert.False(recopied.Synced);
+        Assert.False(recopied.Remote);
+        Assert.Single(repository.GetRecentTextItems(10));
+        Assert.Equal(recopied.Id, Assert.Single(repository.GetRecentTextItems(10)).Id);
+    }
+
+    [Fact]
+    public void UpsertRemoteText_DeduplicatesContentAndKeepsNewestSource()
+    {
+        var repository = new SqliteClipboardRepository(DatabasePath);
+        var baseTime = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        var first = CreateRemoteTextItem("remote-first", "shared text", "HOST-PC", baseTime);
+        var newer = CreateRemoteTextItem("remote-second", "shared text", "CLOUD-DEV", baseTime + 1000);
+
+        repository.UpsertRemoteText(first, originatedLocally: false);
+        repository.UpsertRemoteText(newer, originatedLocally: false);
+
+        var stored = Assert.Single(repository.GetRecentTextItems(10));
+        Assert.Equal("CLOUD-DEV", stored.OriginDeviceId);
+        Assert.Equal(baseTime + 1000, stored.CreatedAtUnixMilliseconds);
+        Assert.True(stored.Synced);
+        Assert.True(stored.Remote);
+    }
+
+    [Fact]
+    public void UpsertRemoteTexts_BatchesItemsAndPreservesDeduplicationSemantics()
+    {
+        var repository = new SqliteClipboardRepository(DatabasePath);
+        var baseTime = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        var first = CreateRemoteTextItem("remote-first", "shared text", "VM-PC", baseTime);
+        var newer = CreateRemoteTextItem("remote-second", "shared text", "VM-PC", baseTime + 1000);
+        var originatedLocally = CreateRemoteTextItem("local-origin", "text from this device", "HOST-PC", baseTime + 2000);
+
+        repository.UpsertRemoteTexts([first, newer, originatedLocally], "HOST-PC");
+
+        var stored = repository.GetRecentTextItems(10).ToDictionary(item => item.TextContent!);
+        Assert.Equal(2, stored.Count);
+        Assert.Equal("remote-first", stored["shared text"].Id);
+        Assert.Equal("VM-PC", stored["shared text"].OriginDeviceId);
+        Assert.Equal(baseTime + 1000, stored["shared text"].CreatedAtUnixMilliseconds);
+        Assert.True(stored["shared text"].Remote);
+        Assert.Equal("HOST-PC", stored["text from this device"].OriginDeviceId);
+        Assert.False(stored["text from this device"].Remote);
+    }
+
+    [Fact]
+    public void StartupCleanup_MigratesLegacyDuplicatesAndMarksSchemaVersion()
+    {
+        var repository = new SqliteClipboardRepository(DatabasePath);
+        var initial = repository.AddText("legacy duplicate", "HOST-PC")!;
+        using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = DatabasePath }.ToString()))
+        {
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = """
+                DROP INDEX ux_clipboard_items_text_content_hash;
+                PRAGMA user_version = 0;
+                INSERT INTO clipboard_items
+                    (id, origin_device_id, type, text_content, image_path, content_hash, created_at, synced, remote)
+                VALUES
+                    ('legacy-duplicate', 'VM-PC', 'TEXT', 'legacy duplicate', NULL, $hash, $created_at, 1, 1);
+                """;
+            command.Parameters.AddWithValue("$hash", initial.ContentHash);
+            command.Parameters.AddWithValue("$created_at", initial.CreatedAtUnixMilliseconds + 1000);
+            command.ExecuteNonQuery();
+        }
+
+        var migratedRepository = new SqliteClipboardRepository(DatabasePath);
+
+        Assert.Equal(1, migratedRepository.GetTextCount());
+        var restored = Assert.Single(migratedRepository.GetRecentTextItems(10));
+        Assert.Equal("legacy-duplicate", restored.Id);
+        Assert.True(restored.Synced);
+        Assert.True(restored.Remote);
+        using var versionConnection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = DatabasePath }.ToString());
+        versionConnection.Open();
+        using var versionCommand = versionConnection.CreateCommand();
+        versionCommand.CommandText = "PRAGMA user_version;";
+        Assert.Equal(1, Convert.ToInt32(versionCommand.ExecuteScalar()));
+    }
+
+    [Fact]
+    public void UpsertRemoteTextDoesNotReplaceNewerUnsyncedLocalCopy()
+    {
+        var repository = new SqliteClipboardRepository(DatabasePath);
+        var local = repository.AddText("shared text", "HOST-PC")!;
+        repository.UpsertRemoteText(local with
+        {
+            Id = "remote-copy",
+            OriginDeviceId = "CLOUD-DEV",
+            CreatedAtUnixMilliseconds = local.CreatedAtUnixMilliseconds - 1000,
+            Synced = true,
+            Remote = true
+        }, originatedLocally: false);
+
+        var stored = Assert.Single(repository.GetRecentTextItems(10));
+        Assert.Equal(local.Id, stored.Id);
+        Assert.Equal("HOST-PC", stored.OriginDeviceId);
+        Assert.False(stored.Synced);
+        Assert.False(stored.Remote);
+    }
+
+    [Fact]
+    public void MarkSyncedMarksOnlyLocalTextItems()
+    {
+        var repository = new SqliteClipboardRepository(DatabasePath);
+        var local = repository.AddText("local", "HOST-PC")!;
+        var remote = CreateRemoteTextItem("remote-id", "remote", "CLOUD-DEV", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+        repository.UpsertRemoteText(remote, originatedLocally: false);
+
+        Assert.True(repository.MarkSynced(local.Id));
+        Assert.False(repository.MarkSynced(remote.Id));
+        Assert.True(repository.FindById(local.Id)!.Synced);
+        Assert.True(repository.FindById(remote.Id)!.Remote);
+    }
+
+    [Fact]
     public void MarkUsed_MovesItemToTopAndPreservesCopyMetadata()
     {
         var repository = new SqliteClipboardRepository(DatabasePath);
@@ -332,5 +461,12 @@ public sealed class SqliteClipboardRepositoryTests : IDisposable
         {
             Directory.Delete(_directory, recursive: true);
         }
+    }
+
+    private static ClipboardItem CreateRemoteTextItem(string id, string text, string originDeviceId, long createdAt)
+    {
+        var normalized = text.Normalize(NormalizationForm.FormC);
+        var contentHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes("TEXT" + normalized))).ToLowerInvariant();
+        return new ClipboardItem(id, originDeviceId, ClipboardItemType.Text, text, null, contentHash, createdAt, true, true);
     }
 }

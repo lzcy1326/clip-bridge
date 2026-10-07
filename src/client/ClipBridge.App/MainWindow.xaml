@@ -5,13 +5,13 @@
         xmlns:core="clr-namespace:ClipBridge.Core.Models;assembly=ClipBridge.Core"
         Title="ClipBridge - 跨设备剪贴板" Height="620" Width="620"
         Icon="pack://application:,,,/ClipBridge.App;component/Assets/Icons/clipbridge.ico"
+        ShowInTaskbar="False"
         MinHeight="360" MinWidth="420"
         WindowStartupLocation="CenterScreen"
         Background="#F4F6F8"
         PreviewKeyDown="Window_PreviewKeyDown"
         Closing="MainWindow_Closing">
     <Window.Resources>
-        <app:HistorySequenceNumberConverter x:Key="HistorySequenceNumberConverter" />
         <app:HistoryPreviewTextConverter x:Key="HistoryPreviewTextConverter" />
         <app:ImagePathToBitmapSourceConverter x:Key="ImagePathToBitmapSourceConverter" />
     </Window.Resources>
@@ -47,8 +47,7 @@
                          ScrollViewer.CanContentScroll="True"
                          VirtualizingPanel.IsVirtualizing="True"
                          VirtualizingPanel.VirtualizationMode="Recycling"
-                         SelectionChanged="HistoryList_SelectionChanged"
-                         MouseDoubleClick="HistoryList_MouseDoubleClick">
+                         SelectionChanged="HistoryList_SelectionChanged">
                     <ListBox.ItemContainerStyle>
                         <Style TargetType="ListBoxItem">
                             <Setter Property="Padding" Value="4,0" />
@@ -75,7 +74,7 @@
                     <ListBox.ItemTemplate>
                         <DataTemplate>
                             <Grid VerticalAlignment="Stretch"
-                                  ToolTipService.InitialShowDelay="350">
+                                  ToolTipService.InitialShowDelay="800">
                                 <Grid.ToolTip>
                                     <ToolTip DataContext="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource Self}}"
                                              Placement="MousePoint" HorizontalOffset="0" VerticalOffset="0"
@@ -124,7 +123,7 @@
                                     <ColumnDefinition Width="1" />
                                     <ColumnDefinition Width="*" />
                                 </Grid.ColumnDefinitions>
-                                <TextBlock Text="{Binding Path=(ItemsControl.AlternationIndex), RelativeSource={RelativeSource AncestorType={x:Type ListBoxItem}}, Converter={StaticResource HistorySequenceNumberConverter}}"
+                                <TextBlock Text="{Binding SequenceNumber}"
                                            HorizontalAlignment="Left" VerticalAlignment="Center"
                                            FontSize="11" Foreground="#8493A0" />
                                 <Border Grid.Column="1" Width="1"

@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.IO;
+using System.Net.Http;
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
@@ -45,9 +46,15 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
 
+        HistoryList.AddHandler(
+            System.Windows.Controls.Control.MouseDoubleClickEvent,
+            new MouseButtonEventHandler(HistoryList_MouseDoubleClick),
+            handledEventsToo: true);
         HistoryList.ItemsSource = _historyItems;
         _clipboardRepository = ((App)System.Windows.Application.Current).ClipboardRepository;
         RefreshHistory();
+        var syncClient = ((App)System.Windows.Application.Current).SyncClient;
+        syncClient.HistoryUpdated += OnSynchronizedHistoryUpdated;
 
         _clipboardMonitor = new ClipboardMonitor(this);
         _clipboardMonitor.TextCaptured += OnTextCaptured;
@@ -61,12 +68,38 @@ public partial class MainWindow : Window
 
     private void OnTextCaptured(string text)
     {
-        if (_clipboardRepository.AddText(text, "local") is null)
+        var item = _clipboardRepository.AddText(text, Environment.MachineName);
+        if (item is null)
         {
             return;
         }
 
         RefreshHistory();
+        _ = PublishCapturedTextAsync(item);
+    }
+
+    private async Task PublishCapturedTextAsync(ClipBridge.Core.Models.ClipboardItem item)
+    {
+        try
+        {
+            await ((App)System.Windows.Application.Current).SyncClient.PublishTextAsync(item);
+        }
+        catch (HttpRequestException)
+        {
+            ((App)System.Windows.Application.Current).SyncClient.ReportStatus("Server 暂时不可用");
+        }
+        catch (Exception exception)
+        {
+            System.Diagnostics.Trace.TraceError("Failed to publish clipboard text: {0}", exception);
+        }
+    }
+
+    private void OnSynchronizedHistoryUpdated()
+    {
+        if (!Dispatcher.HasShutdownStarted)
+        {
+            Dispatcher.BeginInvoke(RefreshHistory);
+        }
     }
 
     private void OnImageCaptured(byte[] pngBytes)
@@ -207,11 +240,15 @@ public partial class MainWindow : Window
 
     private async void HistoryList_MouseDoubleClick(object sender, MouseButtonEventArgs e)
     {
-        if (!_isQuickPasteMode || HistoryList.SelectedItem is null)
+        if (!_isQuickPasteMode || e.ChangedButton != MouseButton.Left
+            || e.OriginalSource is not DependencyObject originalSource
+            || ItemsControl.ContainerFromElement(HistoryList, originalSource) is not ListBoxItem listBoxItem
+            || listBoxItem.DataContext is not ClipBridge.Core.Models.ClipboardItem item)
         {
             return;
         }
 
+        HistoryList.SelectedItem = item;
         e.Handled = true;
         await PasteSelectedItemAsync();
     }
@@ -251,11 +288,11 @@ public partial class MainWindow : Window
             {
                 case ClipBridge.Core.Models.ClipboardItemType.Text when !string.IsNullOrEmpty(item.TextContent):
                     _clipboardMonitor.SuppressTextCapture(item.TextContent);
-                    _clipboardWriter.SetText(item.TextContent);
+                    await _clipboardWriter.SetTextAsync(item.TextContent);
                     break;
                 case ClipBridge.Core.Models.ClipboardItemType.Image when !string.IsNullOrEmpty(item.ImagePath):
                     _clipboardMonitor.SuppressNextImageCapture();
-                    _clipboardWriter.SetImage(item.ImagePath);
+                    await _clipboardWriter.SetImageAsync(item.ImagePath);
                     break;
                 default:
                     return false;

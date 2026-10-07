@@ -55,7 +55,7 @@ func main() {
 		startupCancel()
 		log.Fatalf("ensure device schema: %v", err)
 	}
-	clipboardStore, err := clipboard.Open(startupContext, databaseURL)
+	clipboardStore, err := clipboard.Open(startupContext, databaseURL, os.Getenv("CLIPBRIDGE_IMAGE_DIR"))
 	if err != nil {
 		deviceStore.Close()
 		store.Close()
@@ -81,7 +81,7 @@ func main() {
 
 	server := &http.Server{
 		Addr:              address,
-		Handler:           httpapi.NewRouter(loginService, loginService, deviceStore, clipboardStore),
+		Handler:           httpapi.NewRouterWithImages(loginService, loginService, deviceStore, clipboardStore, deviceStore, clipboardStore, clipboardStore),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 

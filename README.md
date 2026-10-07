@@ -199,15 +199,23 @@ Codex 每完成一个 MVP 后，在这里更新状态。
 [x] MVP-14 文本上传 Server
     L0: PASS（文本校验、SHA-256、认证、设备归属、伪造 user_id、幂等重试、请求体上限测试；Go 全量测试与构建通过）
     L1: PASS（本机 Compose 登录并注册设备后上传返回 201；相同 ID 重试返回 200，数据库仅一条；无令牌 401、未知设备 403、伪造 user_id 400）
-[ ] MVP-15 第二设备拉取历史
-[ ] MVP-16 WebSocket 实时通知
+[x] MVP-15 第二设备拉取历史
+    L0: PASS（Server Go 全量测试通过；Client 回归测试通过，WPF Release 构建通过）
+    L1/L2: PASS（用户已确认 Host 与无剪贴板共享的 VirtualBox Windows 11 VM 双向文字同步和快速粘贴验证通过）
+[ ] MVP-16 HTTP 短间隔同步
 [ ] MVP-17 断线补偿
-[ ] MVP-18 图片上传
+[x] MVP-18 图片上传
+    L0: PASS（Go 全量测试通过；Compose 配置及 Server 镜像构建通过）
+    L1: PASS（隔离 PostgreSQL/Server：设备凭证上传 PNG 201；重复上传 200；内容冲突 409；未授权 401；2 MiB 边界 201/413；Server 重启后图片与元数据保留）
 [ ] MVP-19 图片跨设备同步
 [ ] MVP-20 用户隔离
 [ ] MVP-21 账号禁用与重置
 [ ] MVP-22 开机启动与安装
 [ ] MVP-23 稳定性与恢复
+[ ] MVP-24 设备识别码配对
+    L0: PASS（客户端 57 项测试、Go 全量测试与构建、Windows x64 自包含发布构建通过）
+    L1: PASS（临时 Server/PostgreSQL 端到端验证：匿名登记、配对前隔离、对端确认、共享历史、Server 重启后凭证与关系保持）
+    L2: PASS（用户已确认配对成功、双向文字同步与重启后自动恢复；恢复曾需 30–60 秒，启动恢复改为先恢复轮询、后台补拉历史）
 ```
 
 MVP-01 验证记录：

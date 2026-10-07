@@ -4,8 +4,8 @@
 
 > 项目：ClipBridge  
 > 版本：v1.0  
-> 目标：为 Windows 本地主机与云桌面提供轻量级、账号隔离的跨设备剪贴板能力。  
-> 核心原则：**本地优先、同账号同步、远程内容不自动覆盖系统剪贴板、按 MVP 闭环逐步交付。**
+> 目标：让 Windows 本地主机与云桌面通过配对设备共享剪贴板，使用体验尽量接近同一台计算机。
+> 核心原则：**后台运行、远端内容自动进入本机剪贴板、配对须经对端确认、同步可恢复、按 MVP 闭环逐步交付。**
 
 ---
 
@@ -15,31 +15,50 @@ ClipBridge 解决以下办公问题：
 
 - 本地主机和云桌面无法直接复制粘贴。
 - 两端都能通过网络/代理访问同一台 Linux Server。
-- 每个员工有自己的本地主机和云桌面。
-- 每个员工只能看到自己的剪贴板历史。
-- 同一账号下的设备可以同步文本和图片。
+- 每个用户可以通过设备识别码配对本地主机和云桌面。
+- 只有配对并经对端确认的设备可以互相同步。
+- 每个配对组只能访问自己的剪贴板数据。
+
+### 1.1 2026-10 产品方向更新
+
+本节更新后续开发目标，优先级高于本文旧版本中“账号密码登录、远端内容只进历史、不自动写系统剪贴板、WebSocket 实时通知”等尚未完成的设计描述。现有实现状态以代码和 loop engineering 验收记录为准。
+
+ClipBridge 的目标使用体验：
+
+```text
+设备 A 复制
+  → 后台自动同步
+  → 设备 B 自动更新系统剪贴板
+  → 用户在设备 B 直接 Ctrl+V
+```
+
+目标行为：
+
+- 安装后可选择登录 Windows 时自动启动，应用常驻托盘并在后台工作。
+- 配对设备间默认自动同步文本和不超过 2 MiB 的图片，并写入接收端系统剪贴板。
+- 用户不需要先打开历史窗口、选择记录或手工触发同步。
+- 远端到达与用户本机新复制发生冲突时，本机较新的复制优先，不覆盖较新的本机剪贴板。
+- 自动写入必须携带来源与内容标记，避免两端互相回传形成同步回环。
+- 自动剪贴板行为可在设置中关闭；关闭后内容仍进入本地历史。
+- 设备发现使用 6 位大写字母与数字识别码；任何配对必须由被请求设备明确确认后才持久化。
+- 识别码用于发起配对，不是长期认证凭据；长期通信使用可撤销、按设备授权的凭证。
+- Server 通信采用可重试的独立 HTTP 请求，不依赖 WebSocket 或其他长会话维持正确性。
+
+图片范围限定为剪贴板截图/图片数据，不包括文件剪贴板；图片传输内容上限为 2 MiB，接收端在验证大小后才保存或更新系统剪贴板。
 
 用户典型链路：
 
 ```text
-本地主机 Ctrl+C
+设备 A Ctrl+C
    ↓
-ClipBridge Client
+ClipBridge Client A → HTTP → Linux Server
    ↓
-本地历史
+ClipBridge Client B 自动更新本机 Clipboard
    ↓
-Linux Server
-   ↓
-云桌面 Client 历史
-   ↓
-Ctrl + `
-   ↓
-选择内容
-   ↓
-Enter
-   ↓
-粘贴到当前应用
+设备 B 直接 Ctrl+V
 ```
+
+历史列表和 `Ctrl + \`` Quick Paste 保留为查找、选择旧记录及手动粘贴的补充入口。
 
 ---
 
@@ -59,24 +78,22 @@ Enter
 - `↑ / ↓` 选择。
 - `Enter` 快速粘贴。
 - `Esc` 关闭。
-- 登录/退出。
-- 修改密码。
-- 设备注册。
-- 我的设备列表。
-- 同账号跨设备同步。
-- WebSocket 实时通知。
-- 断线补偿。
+- 首次配对时显示本机识别码。
+- 通过服务器地址和对端识别码发起配对请求。
+- 对端确认/拒绝配对；确认后在两端持久化配对关系。
+- 登录 Windows 后自动启动（安装时可选，设置中可更改）。
+- 收到已配对设备的文本或合规图片后自动更新系统剪贴板。
+- 同一配对组内双向同步。
+- 短间隔 HTTP 拉取和断线补偿。
 - 剪贴板去重。
 - 本地历史清理。
 
 #### Linux Server
 
-- 用户认证。
-- 用户管理。
-- 设备管理。
+- 配对请求、对端确认/拒绝、配对撤销和设备识别码管理。
+- 设备授权凭证签发、轮换和撤销。
 - 剪贴板同步 API。
-- 图片上传/下载。
-- WebSocket Hub。
+- 最大 2 MiB 的图片上传/下载。
 - PostgreSQL。
 - 管理后台。
 - 数据隔离。
@@ -154,9 +171,8 @@ WinUI
 Go
 Gin
 PostgreSQL
-WebSocket
-JWT
-Argon2id
+HTTP/JSON REST
+Per-device credentials
 Linux Filesystem
 Docker Compose
 ```
@@ -177,29 +193,27 @@ V1 不引入额外基础设施。
 │ Sync Client              │
 └────────────┬─────────────┘
              │
-             │ HTTPS / WSS
+             │ HTTPS / REST
              ▼
 ┌──────────────────────────┐
 │ Linux ClipBridge Server  │
 │                          │
-│ Auth                     │
-│ User                     │
+│ Pairing / Device Auth    │
 │ Device                   │
 │ Clipboard API            │
 │ Image API                │
-│ WebSocket Hub            │
 │ Admin                    │
 │                          │
 │ PostgreSQL               │
 │ Object Storage           │
 └────────────┬─────────────┘
              │
-             │ HTTPS / WSS
+             │ HTTPS / REST
              ▼
 ┌──────────────────────────┐
 │ Windows Client B         │
 │                          │
-│ same user                │
+│ paired device            │
 │ Local SQLite             │
 │ Quick Paste              │
 └──────────────────────────┘
@@ -207,26 +221,25 @@ V1 不引入额外基础设施。
 
 ---
 
-# 5. 多用户模型
+# 5. 配对组与数据隔离模型
 
 关系：
 
 ```text
-User
- ├── Device
- ├── Device
- ├── Device
+Owner / Pair Group
+ ├── Device A (confirmed)
+ ├── Device B (confirmed)
  └── Clipboard Items
 ```
 
 示例：
 
 ```text
-张三
+张三的配对组
 ├── 本地主机
 └── 云桌面
 
-李四
+李四的配对组
 ├── 本地主机
 └── 云桌面
 ```
@@ -234,30 +247,30 @@ User
 规则：
 
 ```text
-张三只能看到张三的数据。
-李四只能看到李四的数据。
+设备只可读取其已确认配对组的数据。
+不同配对组之间严格隔离。
 ```
 
 任何普通用户 API：
 
 ```text
-user_id
+owner_id / pair_group_id
 ```
 
 必须来自：
 
 ```text
-Access Token
+Per-device credential
    ↓
-Auth Middleware
+Device Auth Middleware
    ↓
-Current User Context
+Current Owner Context
 ```
 
 禁止客户端指定资源归属：
 
 ```text
-GET /clips?userId=1001
+GET /clips?ownerId=1001
 ```
 
 ---
@@ -298,10 +311,10 @@ ClipBridge.Storage/
 
 ClipBridge.Sync/
   ApiClient
-  AuthClient
+  PairingClient
+  DeviceCredentialStore
   SyncClient
-  WebSocketClient
-  ReconnectManager
+  RetryPolicy
   SyncCursorStore
 
 ClipBridge.Tests/
@@ -502,41 +515,82 @@ SendInput Ctrl+V
 
 # 11. 同步回环策略
 
-远程同步内容：
+已配对设备收到远端内容后：
 
 ```text
-只进入本地历史
+先校验来源、类型、大小和版本
+  ↓
+写入本地历史
+  ↓
+在未检测到较新本机复制时更新系统剪贴板
 ```
 
-默认：
+同步回环保护：
 
 ```text
-不自动写 Windows Clipboard
+记录来源设备、内容 ID 和本地程序写入标记
+  ↓
+监听到自身写入时不重新上传
 ```
 
-因此远程同步不会自然触发回环。
+本机复制与远端到达并发时，以接收端最近一次真实用户复制为准。自动写入失败不删除历史项、不停止监听、不停止网络同步；仅通过托盘状态提示并按退避策略重试。
 
-当用户主动选择某条记录粘贴时：
-
-```text
-suppressNextClipboardUpdate = true
-```
-
-然后：
-
-```text
-ClipboardWriter
-   ↓
-WM_CLIPBOARDUPDATE
-   ↓
-发现 suppress
-   ↓
-IGNORE
-```
+自动同步剪贴板默认启用，可在设置中关闭；关闭后远端内容仅写入历史。用户手工选择历史记录粘贴仍使用独立的快速粘贴流程。
 
 ---
 
-# 12. Server 结构
+# 12. 配对与设备识别码
+
+每个安装实例首次根据本机可用网卡的 MAC 地址派生一个 6 位大写字母/数字识别码，并立即持久化；启动时不重新生成。原始 MAC 不发送给 Server，也不得用作身份凭证。6 位码可能冲突，Server 必须检查唯一性并在冲突时要求重新生成。识别码可修改，修改后旧码失效并要求重新配对。
+
+配对流程：
+
+```text
+设备 A 输入 Server 地址 + 设备 B 识别码
+  ↓
+Server 创建限时 pending 请求
+  ↓
+设备 B 收到托盘/应用确认提示
+  ├── 拒绝/超时：不建立关系
+  └── 确认：签发按设备授权的凭证
+               ↓
+            两端持久化配对
+```
+
+配对请求至少包含请求设备名、识别码、来源地址和有效期。需提供请求频率限制、拒绝后冷却、重复请求幂等、设备解绑和凭证撤销。识别码本身不具有长期授权能力。
+
+双方任何一端都可以输入另一端识别码发起请求；接受请求的一端负责明确授权。配对完成后关系为双向同步。
+
+---
+
+# 13. HTTP 同步与恢复
+
+所有同步步骤都通过有超时、可重试的独立 HTTP 请求完成：
+
+```text
+POST /pairing-requests
+GET  /pairing-requests/pending
+POST /pairing-requests/{id}/decision
+POST /clips
+GET  /clips?after=<cursor>&limit=100
+POST /images
+GET  /images/{id}
+```
+
+客户端使用短间隔轮询获取新剪贴板记录与待确认配对请求；网络不可用时按退避策略重试，恢复后从持久化 cursor 补齐。令牌过期时自动续期或重新授权，不得静默永久停止同步。长会话/WebSocket 不作为同步正确性的前提。
+
+---
+
+# 14. 安装与启动
+
+- Windows 安装包支持选择安装目录、升级和卸载。
+- 安装器允许设置开机启动；默认启用但可取消，之后可在设置中更改。
+- 开机启动以托盘后台方式运行，不创建额外控制台窗口。
+- 历史数据库、图片对象和配对凭证保存在用户数据目录；升级或卸载不意外删除用户数据。
+
+---
+
+# 15. Server 结构
 
 ```text
 server/
@@ -545,13 +599,12 @@ cmd/
 └── server/
 
 internal/
-├── auth/
-├── user/
 ├── device/
+├── pairing/
+├── credential/
 ├── clipboard/
 ├── image/
 ├── sync/
-├── websocket/
 ├── admin/
 └── storage/
 
@@ -566,7 +619,18 @@ docker-compose.yml
 
 ---
 
-# 13. Server 数据模型
+# 16. Server 数据模型
+
+配对识别码是设备发现标识，不代表数据归属。Server 使用内部 owner/pair-group 作为数据隔离边界，客户端不能自行指定 owner。
+
+```text
+Pair Group
+├── Device A
+├── Device B
+└── Clipboard Items
+```
+
+同组设备可以同步；不同组设备不可读取彼此数据。配对待确认记录与已建立关系分开保存，只有确认后才创建有效关系并签发设备凭证。兼容现有用户表时，用户仅作为 owner 的内部实现，不要求普通用户在客户端输入账号和密码。
 
 ## users
 
@@ -601,14 +665,37 @@ DISABLED
 
 ```text
 id
-user_id
-name
-machine_name
+owner_id
+device_code_hash
+device_name
 platform
-client_version
+credential_hash
 status
 last_seen_at
 created_at
+```
+
+## pairing_requests
+
+```text
+id
+requester_device_id
+target_device_id
+status                 -- pending / accepted / rejected / expired
+expires_at
+decided_at
+created_at
+```
+
+## device_pairings
+
+```text
+id
+owner_id
+device_a_id
+device_b_id
+created_at
+revoked_at
 ```
 
 ---
@@ -617,7 +704,7 @@ created_at
 
 ```text
 id
-user_id
+owner_id
 origin_device_id
 type
 text_content
@@ -627,46 +714,32 @@ created_at
 expires_at
 ```
 
-必须直接保存：
+必须由服务端认证上下文确定归属：
 
 ```text
-user_id
+owner_id
 ```
+
+服务端持久化设备凭证的 Hash，不保存可直接重放的明文长期密钥。设备解绑或重置时撤销相关凭证。
 
 ---
 
-## refresh_tokens
+# 17. REST API
 
-```text
-id
-user_id
-device_id
-token_hash
-expires_at
-revoked_at
-created_at
-```
-
----
-
-# 14. REST API
-
-## Auth
+新安装使用待确认配对和设备凭证；旧版账号登录接口只用于迁移和现有实现兼容，不作为常规配置流程。
 
 ```http
-POST /api/v1/auth/login
-POST /api/v1/auth/refresh
-POST /api/v1/auth/logout
-POST /api/v1/auth/change-password
+POST /api/v1/pairing-requests
+GET  /api/v1/pairing-requests/pending
+POST /api/v1/pairing-requests/{id}/decision
 ```
 
 ## Device
 
 ```http
-POST   /api/v1/devices
-GET    /api/v1/devices
-PATCH  /api/v1/devices/{id}
-DELETE /api/v1/devices/{id}
+GET    /api/v1/devices/me
+PATCH  /api/v1/devices/me/code
+DELETE /api/v1/devices/{id}/pairing
 ```
 
 ## Clipboard
@@ -684,61 +757,18 @@ POST /api/v1/images
 GET  /api/v1/images/{id}
 ```
 
-## WebSocket
+图片上传使用原始 PNG/JPEG 请求体：
 
-```text
-GET /api/v1/ws
+```http
+POST /api/v1/images
+Authorization: Bearer <device credential>
+X-Clip-ID: <clipboard item id>
+Content-Type: image/png
 ```
 
----
+最多接受 2 MiB 原始图片内容；Server 在读取请求体时限制大小，验证真实图片格式后才落盘。上传对象存储在 `CLIPBRIDGE_IMAGE_DIR` 指定的目录，Compose 部署将其挂载到持久卷。重复 ID 与相同来源、格式、内容哈希会刷新时间并返回已有记录；同 ID 对应不同内容返回冲突。
 
-# 15. WebSocket
-
-连接建立后绑定：
-
-```text
-user_id
-device_id
-```
-
-Hub：
-
-```text
-User 1001
-├── Device A
-├── Device B
-└── Device C
-```
-
-Device A 上传：
-
-```text
-broadcast:
-user_id = 1001
-exclude device = A
-```
-
-示例事件：
-
-```json
-{
-  "event": "clipboard.created",
-  "data": {
-    "id": "01K...",
-    "originDeviceId": "device-a",
-    "type": "TEXT",
-    "text": "hello",
-    "contentHash": "sha256...",
-    "createdAt": 1790658000000
-  }
-}
-```
-
----
-
-# 16. 断线补偿
-
-WebSocket 只负责实时性，不是唯一事实来源。
+# 18. 断线补偿
 
 客户端维护：
 
@@ -759,7 +789,7 @@ GET /clips?after=cursor
   ↓
 保存 cursor
   ↓
-重新建立 WebSocket
+继续 HTTP 轮询
 ```
 
 要求：
@@ -767,11 +797,11 @@ GET /clips?after=cursor
 - Server 重启不永久丢数据。
 - Client 休眠不永久丢数据。
 - 代理断开不永久丢数据。
-- WS 重连不永久丢数据。
+- HTTP 请求超时、Server 重启或设备休眠不永久丢数据。
 
 ---
 
-# 17. 去重
+# 19. 去重
 
 文本：
 
@@ -801,24 +831,21 @@ clip.id
 
 ---
 
-# 18. 安全边界
+# 20. 安全边界
 
 必须实现：
 
 - HTTPS。
-- WSS。
-- Argon2id。
-- Access Token。
-- Refresh Token。
-- Refresh Token 只保存 Hash。
-- 用户禁用。
-- Device 撤销。
+- 配对请求限流和短有效期。
+- 设备凭证签发、轮换和撤销。
+- 设备授权检查及配对关系隔离。
+- 设备识别码唯一性校验；识别码不作为长期密钥。
 - 用户数据隔离。
 - 图片访问鉴权。
 - 请求体大小限制。
 - 图片格式验证。
 - 防目录穿越。
-- 登录限流。
+- 配对请求限流。
 - 日志脱敏。
 
 日志禁止记录：
@@ -833,7 +860,7 @@ clipboard image
 
 ---
 
-# 19. Ditto 参考原则
+# 21. Ditto 参考原则
 
 参考：
 
@@ -861,15 +888,17 @@ Ditto 仅用于：
 
 ---
 
-# 20. 架构变更规则
+# 22. 架构变更规则
 
-Codex 不得自行修改：
+已由用户确认的 2026-10 产品方向（设备确认配对、远端自动更新系统剪贴板、短间隔 HTTP、2 MiB 图片上限和可选开机启动）视为当前授权架构，不再受旧版“远程不自动覆盖 Clipboard”条款限制。
+
+后续实现不得自行扩大以下边界：
 
 - 技术栈。
 - 核心模块边界。
-- 用户隔离原则。
-- 远程不自动覆盖 Clipboard 原则。
-- V1 功能范围。
+- 设备授权、配对确认和撤销要求。
+- 2 MiB 图片传输上限。
+- 仅同步剪贴板文本与图片，不扩展为文件传输。
 
 如果发现架构确实无法完成当前 MVP：
 

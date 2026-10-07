@@ -1,14 +1,19 @@
 package httpapi
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image"
+	"image/color"
+	"image/png"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"clipbridge/server/internal/auth"
 	"clipbridge/server/internal/clipboard"
@@ -53,6 +58,52 @@ type clipUploaderStub struct {
 	calls     int
 }
 
+type clipListerStub struct {
+	page   clipboard.TextHistoryPage
+	after  *clipboard.Cursor
+	limit  int
+	userID int64
+	err    error
+	calls  int
+}
+
+const validTestClipID = "550e8400-e29b-41d4-a716-446655440000"
+
+type imageUploaderStub struct {
+	clip      clipboard.ImageClip
+	upload    clipboard.ImageUpload
+	userID    int64
+	deviceID  int64
+	ownerID   int64
+	duplicate bool
+	err       error
+	calls     int
+}
+
+func (stub *imageUploaderStub) UploadImage(_ context.Context, userID, deviceID int64, upload clipboard.ImageUpload) (clipboard.ImageClip, bool, error) {
+	stub.calls++
+	stub.userID = userID
+	stub.deviceID = deviceID
+	stub.upload = upload
+	return stub.clip, stub.duplicate, stub.err
+}
+
+func (stub *imageUploaderStub) UploadImageForOwner(_ context.Context, ownerID, deviceID int64, upload clipboard.ImageUpload) (clipboard.ImageClip, bool, error) {
+	stub.calls++
+	stub.ownerID = ownerID
+	stub.deviceID = deviceID
+	stub.upload = upload
+	return stub.clip, stub.duplicate, stub.err
+}
+
+func (stub *clipListerStub) ListText(_ context.Context, userID int64, after *clipboard.Cursor, limit int) (clipboard.TextHistoryPage, error) {
+	stub.calls++
+	stub.userID = userID
+	stub.after = after
+	stub.limit = limit
+	return stub.page, stub.err
+}
+
 func (stub *clipUploaderStub) UploadText(_ context.Context, userID int64, upload clipboard.TextUpload) (clipboard.TextClip, bool, error) {
 	stub.calls++
 	stub.userID = userID
@@ -92,6 +143,63 @@ func TestHealthReturnsOk(t *testing.T) {
 	if body.Status != "ok" {
 		t.Fatalf("expected status body %q, got %q", "ok", body.Status)
 	}
+}
+
+func TestImageUploadUsesPairedDeviceIdentityAndRejectsOversizedBody(t *testing.T) {
+	pairing := &pairingServiceStub{
+		principal:  device.Principal{DeviceID: 7, OwnerID: 11, Name: "HOST-PC"},
+		credential: "device-secret",
+	}
+	uploader := &imageUploaderStub{clip: clipboard.ImageClip{ID: validTestClipID, OriginDeviceID: 7, Type: "IMAGE", ContentType: "image/png"}}
+	router := NewRouterWithImages(nil, nil, nil, nil, pairing, uploader)
+	imageData := validTestImagePNG(t)
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/images", bytes.NewReader(imageData))
+	request.Header.Set("Authorization", "Bearer device-secret")
+	request.Header.Set("X-Clip-ID", validTestClipID)
+	request.Header.Set("Content-Type", "image/png")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusCreated, response.Code, response.Body.String())
+	}
+	if uploader.calls != 1 || uploader.ownerID != 11 || uploader.deviceID != 7 || uploader.upload.ID != validTestClipID || !bytes.Equal(uploader.upload.Data, imageData) {
+		t.Fatalf("image upload was not scoped to authenticated device: %+v", uploader)
+	}
+
+	uploader.duplicate = true
+	duplicateRequest := httptest.NewRequest(http.MethodPost, "/api/v1/images", bytes.NewReader(imageData))
+	duplicateRequest.Header.Set("Authorization", "Bearer device-secret")
+	duplicateRequest.Header.Set("X-Clip-ID", validTestClipID)
+	duplicateRequest.Header.Set("Content-Type", "image/png")
+	duplicateResponse := httptest.NewRecorder()
+	router.ServeHTTP(duplicateResponse, duplicateRequest)
+	if duplicateResponse.Code != http.StatusOK {
+		t.Fatalf("duplicate upload status = %d, want %d", duplicateResponse.Code, http.StatusOK)
+	}
+
+	oversizedRequest := httptest.NewRequest(http.MethodPost, "/api/v1/images", bytes.NewReader(make([]byte, clipboard.MaxImageUploadBytes+1)))
+	oversizedRequest.Header.Set("Authorization", "Bearer device-secret")
+	oversizedRequest.Header.Set("X-Clip-ID", validTestClipID)
+	oversizedRequest.Header.Set("Content-Type", "image/png")
+	oversizedResponse := httptest.NewRecorder()
+	router.ServeHTTP(oversizedResponse, oversizedRequest)
+	if oversizedResponse.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("oversized upload status = %d, want %d: %s", oversizedResponse.Code, http.StatusRequestEntityTooLarge, oversizedResponse.Body.String())
+	}
+	if uploader.calls != 2 {
+		t.Fatalf("oversized upload reached store: got %d calls, want 2", uploader.calls)
+	}
+}
+
+func validTestImagePNG(t *testing.T) []byte {
+	t.Helper()
+	var output bytes.Buffer
+	img := image.NewRGBA(image.Rect(0, 0, 2, 2))
+	img.Set(0, 0, color.RGBA{B: 255, A: 255})
+	if err := png.Encode(&output, img); err != nil {
+		t.Fatalf("encode test PNG: %v", err)
+	}
+	return output.Bytes()
 }
 
 func TestLoginReturnsTokenResponse(t *testing.T) {
@@ -334,6 +442,64 @@ func TestUploadTextRejectsMalformedOversizedAndTrailingBodies(t *testing.T) {
 		if response.Code != http.StatusBadRequest || uploader.calls != 0 {
 			t.Errorf("malformed or oversized request: expected 400 without upload, got %d and %d calls", response.Code, uploader.calls)
 		}
+	}
+}
+
+func TestListTextHistoryUsesTokenIdentityAndCursorPage(t *testing.T) {
+	verifier := &tokenVerifierStub{userID: 42, token: "valid-access-token"}
+	clipID := "550e8400-e29b-41d4-a716-446655440000"
+	lister := &clipListerStub{page: clipboard.TextHistoryPage{Items: []clipboard.TextHistoryItem{{ID: clipID, Text: "history"}}, HasMore: true, NextCursor: "next-page"}}
+	cursor, err := clipboard.EncodeCursor(clipboard.Cursor{ID: clipID, CreatedAt: time.Date(2026, 9, 30, 1, 2, 3, 0, time.UTC)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	router := NewRouter(nil, verifier, nil, nil, lister)
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/clips?after="+cursor+"&limit=25", nil)
+	request.Header.Set("Authorization", "Bearer valid-access-token")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d: %s", response.Code, response.Body.String())
+	}
+	if timing := response.Header().Get("Server-Timing"); !strings.Contains(timing, "auth;dur=") || !strings.Contains(timing, "history;dur=") {
+		t.Fatalf("expected authentication and history timings, got %q", timing)
+	}
+	if lister.calls != 1 || lister.userID != 42 || lister.limit != 25 || lister.after == nil || lister.after.ID != clipID {
+		t.Fatalf("history query did not use authenticated user/cursor: %+v", lister)
+	}
+	if !strings.Contains(response.Body.String(), `"next_cursor":"next-page"`) || !strings.Contains(response.Body.String(), `"has_more":true`) {
+		t.Fatalf("history page response is incomplete: %s", response.Body.String())
+	}
+}
+
+func TestListTextHistoryRequiresAuthenticationAndRejectsUserOverride(t *testing.T) {
+	for _, test := range []struct {
+		name          string
+		authorization string
+		query         string
+		wantStatus    int
+	}{
+		{name: "missing token", query: "", wantStatus: http.StatusUnauthorized},
+		{name: "unknown token", authorization: "Bearer wrong", wantStatus: http.StatusUnauthorized},
+		{name: "client user id", authorization: "Bearer valid-access-token", query: "?user_id=7", wantStatus: http.StatusBadRequest},
+		{name: "duplicate cursor", authorization: "Bearer valid-access-token", query: "?after=a&after=b", wantStatus: http.StatusBadRequest},
+		{name: "invalid limit", authorization: "Bearer valid-access-token", query: "?limit=101", wantStatus: http.StatusBadRequest},
+		{name: "invalid cursor", authorization: "Bearer valid-access-token", query: "?after=invalid!", wantStatus: http.StatusBadRequest},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			verifier := &tokenVerifierStub{userID: 42, token: "valid-access-token"}
+			lister := &clipListerStub{}
+			router := NewRouter(nil, verifier, nil, nil, lister)
+			request := httptest.NewRequest(http.MethodGet, "/api/v1/clips"+test.query, nil)
+			if test.authorization != "" {
+				request.Header.Set("Authorization", test.authorization)
+			}
+			response := httptest.NewRecorder()
+			router.ServeHTTP(response, request)
+			if response.Code != test.wantStatus || lister.calls != 0 {
+				t.Fatalf("got status %d and %d lister calls, want status %d and no call", response.Code, lister.calls, test.wantStatus)
+			}
+		})
 	}
 }
 

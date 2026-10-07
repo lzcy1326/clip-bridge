@@ -1,12 +1,24 @@
 using System.Windows;
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Windows.Media.Imaging;
 
 namespace ClipBridge.Windows;
 
 public sealed class ClipboardWriter
 {
-    public void SetText(string text)
+    private static readonly TimeSpan RetryDelay = TimeSpan.FromMilliseconds(40);
+    private const int MaxAttempts = 5;
+    private readonly Action<string> _setText;
+    private readonly Action<BitmapSource> _setImage;
+
+    public ClipboardWriter(Action<string>? setText = null, Action<BitmapSource>? setImage = null)
+    {
+        _setText = setText ?? Clipboard.SetText;
+        _setImage = setImage ?? Clipboard.SetImage;
+    }
+
+    public Task SetTextAsync(string text, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(text);
         if (text.Length == 0)
@@ -14,10 +26,10 @@ public sealed class ClipboardWriter
             throw new ArgumentException("Clipboard text cannot be empty.", nameof(text));
         }
 
-        Clipboard.SetText(text);
+        return SetClipboardDataWithRetryAsync(() => _setText(text), cancellationToken);
     }
 
-    public void SetImage(string imagePath)
+    public async Task SetImageAsync(string imagePath, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(imagePath);
         if (!File.Exists(imagePath))
@@ -36,6 +48,23 @@ public sealed class ClipboardWriter
         bitmap.StreamSource = stream;
         bitmap.EndInit();
         bitmap.Freeze();
-        Clipboard.SetImage(bitmap);
+        await SetClipboardDataWithRetryAsync(() => _setImage(bitmap), cancellationToken);
+    }
+
+    private static async Task SetClipboardDataWithRetryAsync(Action write, CancellationToken cancellationToken)
+    {
+        for (var attempt = 1; ; attempt++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            try
+            {
+                write();
+                return;
+            }
+            catch (ExternalException) when (attempt < MaxAttempts)
+            {
+                await Task.Delay(RetryDelay, cancellationToken);
+            }
+        }
     }
 }

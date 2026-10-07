@@ -18,6 +18,7 @@
   <ItemGroup>
     <ProjectReference Include="..\ClipBridge.Core\ClipBridge.Core.csproj" />
     <ProjectReference Include="..\ClipBridge.Storage\ClipBridge.Storage.csproj" />
+    <ProjectReference Include="..\ClipBridge.Sync\ClipBridge.Sync.csproj" />
     <ProjectReference Include="..\ClipBridge.Windows\ClipBridge.Windows.csproj" />
   </ItemGroup>
 

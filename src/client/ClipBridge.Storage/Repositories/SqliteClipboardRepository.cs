@@ -1,5 +1,7 @@
 using System.Security.Cryptography;
+using System.Diagnostics;
 using System.Text;
+using ClipBridge.Core.Diagnostics;
 using ClipBridge.Core.Interfaces;
 using ClipBridge.Core.Models;
 using Microsoft.Data.Sqlite;
@@ -59,7 +61,7 @@ public sealed class SqliteClipboardRepository : IClipboardRepository
         {
             findCommand.Transaction = transaction;
             findCommand.CommandText = """
-                SELECT id, created_at
+                SELECT id, created_at, remote
                 FROM clipboard_items
                 WHERE type = $type AND content_hash = $content_hash
                 LIMIT 1;
@@ -72,9 +74,10 @@ public sealed class SqliteClipboardRepository : IClipboardRepository
             {
                 var existingId = existingReader.GetString(0);
                 var existingCreatedAt = existingReader.GetInt64(1);
+                var existingIsRemote = existingReader.GetInt32(2) != 0;
                 var updatedItem = item with
                 {
-                    Id = existingId,
+                    Id = existingIsRemote ? item.Id : existingId,
                     CreatedAtUnixMilliseconds = Math.Max(item.CreatedAtUnixMilliseconds, existingCreatedAt + 1)
                 };
                 existingReader.Close();
@@ -83,13 +86,15 @@ public sealed class SqliteClipboardRepository : IClipboardRepository
                 updateCommand.Transaction = transaction;
                 updateCommand.CommandText = """
                     UPDATE clipboard_items
-                    SET origin_device_id = $origin_device_id,
+                    SET id = $new_id,
+                        origin_device_id = $origin_device_id,
                         text_content = $text_content,
                         created_at = $created_at,
                         synced = 0,
                         remote = 0
                     WHERE id = $id;
                     """;
+                updateCommand.Parameters.AddWithValue("$new_id", updatedItem.Id);
                 updateCommand.Parameters.AddWithValue("$id", existingId);
                 updateCommand.Parameters.AddWithValue("$origin_device_id", updatedItem.OriginDeviceId);
                 updateCommand.Parameters.AddWithValue("$text_content", updatedItem.TextContent!);
@@ -122,6 +127,147 @@ public sealed class SqliteClipboardRepository : IClipboardRepository
         transaction.Commit();
 
         return item;
+    }
+
+    public void UpsertRemoteText(ClipboardItem item, bool originatedLocally)
+    {
+        ArgumentNullException.ThrowIfNull(item);
+        UpsertRemoteTextBatch([(item, originatedLocally)]);
+    }
+
+    public void UpsertRemoteTexts(IReadOnlyList<ClipboardItem> items, string localDeviceId)
+    {
+        ArgumentNullException.ThrowIfNull(items);
+        ArgumentException.ThrowIfNullOrWhiteSpace(localDeviceId);
+        if (items.Count == 0)
+        {
+            return;
+        }
+
+        var batch = new (ClipboardItem Item, bool OriginatedLocally)[items.Count];
+        for (var index = 0; index < items.Count; index++)
+        {
+            var item = items[index] ?? throw new ArgumentException("A remote text item cannot be null.", nameof(items));
+            batch[index] = (item, string.Equals(item.OriginDeviceId, localDeviceId, StringComparison.Ordinal));
+        }
+
+        UpsertRemoteTextBatch(batch);
+    }
+
+    private void UpsertRemoteTextBatch(IReadOnlyList<(ClipboardItem Item, bool OriginatedLocally)> items)
+    {
+        foreach (var (item, _) in items)
+        {
+            if (item.Type != ClipboardItemType.Text || string.IsNullOrWhiteSpace(item.TextContent))
+            {
+                throw new ArgumentException("A remote text history item must contain text.", nameof(items));
+            }
+        }
+
+        if (items.Count == 0)
+        {
+            return;
+        }
+
+        using var connection = OpenConnection();
+        using var transaction = connection.BeginTransaction();
+        using var findCommand = connection.CreateCommand();
+        findCommand.Transaction = transaction;
+        findCommand.CommandText = """
+            SELECT id, created_at, synced
+            FROM clipboard_items
+            WHERE type = $type AND content_hash = $content_hash
+            LIMIT 1;
+            """;
+        findCommand.Parameters.AddWithValue("$type", TextTypeName);
+        var findHashParameter = findCommand.Parameters.Add("$content_hash", SqliteType.Text);
+
+        using var updateCommand = connection.CreateCommand();
+        updateCommand.Transaction = transaction;
+        updateCommand.CommandText = """
+            UPDATE clipboard_items
+            SET origin_device_id = $origin_device_id,
+                text_content = $text_content,
+                created_at = $created_at,
+                synced = 1,
+                remote = $remote
+            WHERE id = $id;
+            """;
+        var updateIdParameter = updateCommand.Parameters.Add("$id", SqliteType.Text);
+        var updateOriginParameter = updateCommand.Parameters.Add("$origin_device_id", SqliteType.Text);
+        var updateTextParameter = updateCommand.Parameters.Add("$text_content", SqliteType.Text);
+        var updateCreatedParameter = updateCommand.Parameters.Add("$created_at", SqliteType.Integer);
+        var updateRemoteParameter = updateCommand.Parameters.Add("$remote", SqliteType.Integer);
+
+        using var insertCommand = connection.CreateCommand();
+        insertCommand.Transaction = transaction;
+        insertCommand.CommandText = """
+            INSERT INTO clipboard_items
+                (id, origin_device_id, type, text_content, image_path, content_hash, created_at, synced, remote)
+            VALUES
+                ($id, $origin_device_id, $type, $text_content, NULL, $content_hash, $created_at, 1, $remote);
+            """;
+        var insertIdParameter = insertCommand.Parameters.Add("$id", SqliteType.Text);
+        var insertOriginParameter = insertCommand.Parameters.Add("$origin_device_id", SqliteType.Text);
+        insertCommand.Parameters.AddWithValue("$type", TextTypeName);
+        var insertTextParameter = insertCommand.Parameters.Add("$text_content", SqliteType.Text);
+        var insertHashParameter = insertCommand.Parameters.Add("$content_hash", SqliteType.Text);
+        var insertCreatedParameter = insertCommand.Parameters.Add("$created_at", SqliteType.Integer);
+        var insertRemoteParameter = insertCommand.Parameters.Add("$remote", SqliteType.Integer);
+
+        foreach (var (item, originatedLocally) in items)
+        {
+            findHashParameter.Value = item.ContentHash;
+            string? existingId = null;
+            long existingCreatedAt = 0;
+            var existingIsSynced = false;
+            using (var reader = findCommand.ExecuteReader())
+            {
+                if (reader.Read())
+                {
+                    existingId = reader.GetString(0);
+                    existingCreatedAt = reader.GetInt64(1);
+                    existingIsSynced = reader.GetInt32(2) != 0;
+                }
+            }
+
+            if (existingId is not null)
+            {
+                if (existingIsSynced && item.CreatedAtUnixMilliseconds > existingCreatedAt)
+                {
+                    updateIdParameter.Value = existingId;
+                    updateOriginParameter.Value = item.OriginDeviceId;
+                    updateTextParameter.Value = item.TextContent!;
+                    updateCreatedParameter.Value = item.CreatedAtUnixMilliseconds;
+                    updateRemoteParameter.Value = originatedLocally ? 0 : 1;
+                    updateCommand.ExecuteNonQuery();
+                }
+
+                continue;
+            }
+
+            insertIdParameter.Value = item.Id;
+            insertOriginParameter.Value = item.OriginDeviceId;
+            insertTextParameter.Value = item.TextContent!;
+            insertHashParameter.Value = item.ContentHash;
+            insertCreatedParameter.Value = item.CreatedAtUnixMilliseconds;
+            insertRemoteParameter.Value = originatedLocally ? 0 : 1;
+            insertCommand.ExecuteNonQuery();
+        }
+
+        transaction.Commit();
+    }
+
+    public bool MarkSynced(string id)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(id);
+
+        using var connection = OpenConnection();
+        using var command = connection.CreateCommand();
+        command.CommandText = "UPDATE clipboard_items SET synced = 1 WHERE id = $id AND type = $type AND remote = 0;";
+        command.Parameters.AddWithValue("$id", id);
+        command.Parameters.AddWithValue("$type", TextTypeName);
+        return command.ExecuteNonQuery() == 1;
     }
 
     public ClipboardItem AddImage(ReadOnlyMemory<byte> pngBytes, string originDeviceId)
@@ -239,6 +385,116 @@ public sealed class SqliteClipboardRepository : IClipboardRepository
 
         transaction.Commit();
         return item;
+    }
+
+    public ClipboardItem UpsertRemoteImage(string id, string originDeviceId, ReadOnlyMemory<byte> pngBytes, long createdAtUnixMilliseconds)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(id);
+        ArgumentException.ThrowIfNullOrWhiteSpace(originDeviceId);
+        if (pngBytes.IsEmpty)
+        {
+            throw new ArgumentException("PNG image content cannot be empty.", nameof(pngBytes));
+        }
+
+        var contentHash = ComputeContentHash(ImageTypeName, pngBytes.Span);
+        var imagePath = Path.Combine(_objectsDirectory, $"{contentHash}.png");
+        if (!File.Exists(imagePath))
+        {
+            Directory.CreateDirectory(_objectsDirectory);
+            var temporaryPath = Path.Combine(_objectsDirectory, $".{contentHash}.{Guid.NewGuid():N}.tmp");
+            try
+            {
+                File.WriteAllBytes(temporaryPath, pngBytes.ToArray());
+                try
+                {
+                    File.Move(temporaryPath, imagePath);
+                }
+                catch (IOException) when (File.Exists(imagePath))
+                {
+                    File.Delete(temporaryPath);
+                }
+            }
+            finally
+            {
+                if (File.Exists(temporaryPath))
+                {
+                    File.Delete(temporaryPath);
+                }
+            }
+        }
+
+        var createdAt = createdAtUnixMilliseconds;
+        using var connection = OpenConnection();
+        using var transaction = connection.BeginTransaction();
+        using (var findCommand = connection.CreateCommand())
+        {
+            findCommand.Transaction = transaction;
+            findCommand.CommandText = "SELECT id, created_at FROM clipboard_items WHERE type = $type AND content_hash = $hash LIMIT 1;";
+            findCommand.Parameters.AddWithValue("$type", ImageTypeName);
+            findCommand.Parameters.AddWithValue("$hash", contentHash);
+            using var reader = findCommand.ExecuteReader();
+            if (reader.Read())
+            {
+                id = reader.GetString(0);
+                createdAt = Math.Max(createdAt, reader.GetInt64(1));
+                reader.Close();
+                using var update = connection.CreateCommand();
+                update.Transaction = transaction;
+                update.CommandText = "UPDATE clipboard_items SET origin_device_id=$origin, image_path=$path, created_at=$created, synced=1, remote=1 WHERE id=$id;";
+                update.Parameters.AddWithValue("$id", id);
+                update.Parameters.AddWithValue("$origin", originDeviceId);
+                update.Parameters.AddWithValue("$path", imagePath);
+                update.Parameters.AddWithValue("$created", createdAt);
+                update.ExecuteNonQuery();
+                transaction.Commit();
+                return new ClipboardItem(id, originDeviceId, ClipboardItemType.Image, null, imagePath, contentHash, createdAt, true, true);
+            }
+        }
+
+        using (var insert = connection.CreateCommand())
+        {
+            insert.Transaction = transaction;
+            insert.CommandText = "INSERT INTO clipboard_items (id, origin_device_id, type, text_content, image_path, content_hash, created_at, synced, remote) VALUES ($id, $origin, $type, NULL, $path, $hash, $created, 1, 1);";
+            insert.Parameters.AddWithValue("$id", id);
+            insert.Parameters.AddWithValue("$origin", originDeviceId);
+            insert.Parameters.AddWithValue("$type", ImageTypeName);
+            insert.Parameters.AddWithValue("$path", imagePath);
+            insert.Parameters.AddWithValue("$hash", contentHash);
+            insert.Parameters.AddWithValue("$created", createdAt);
+            insert.ExecuteNonQuery();
+        }
+
+        transaction.Commit();
+        return new ClipboardItem(id, originDeviceId, ClipboardItemType.Image, null, imagePath, contentHash, createdAt, true, true);
+    }
+
+    public bool MarkImageSynced(string id)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(id);
+        using var connection = OpenConnection();
+        using var command = connection.CreateCommand();
+        command.CommandText = "UPDATE clipboard_items SET synced = 1 WHERE id = $id AND type = $type AND remote = 0;";
+        command.Parameters.AddWithValue("$id", id);
+        command.Parameters.AddWithValue("$type", ImageTypeName);
+        return command.ExecuteNonQuery() == 1;
+    }
+
+    public IReadOnlyList<ClipboardItem> GetPendingImages(int limit)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(limit);
+        using var connection = OpenConnection();
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT id, origin_device_id, type, text_content, image_path, content_hash, created_at, synced, remote, last_used_at FROM clipboard_items WHERE type = $type AND synced = 0 AND remote = 0 ORDER BY created_at DESC LIMIT $limit;";
+        command.Parameters.AddWithValue("$type", ImageTypeName);
+        command.Parameters.AddWithValue("$limit", limit);
+        using var reader = command.ExecuteReader();
+        var items = new List<ClipboardItem>();
+        while (reader.Read())
+        {
+            items.Add(ReadClipboardItem(reader));
+        }
+
+        return items;
     }
 
     public int GetTextCount()
@@ -396,6 +652,7 @@ public sealed class SqliteClipboardRepository : IClipboardRepository
 
     private void InitializeDatabase()
     {
+        var initializationTimer = Stopwatch.StartNew();
         using var connection = OpenConnection();
         using var command = connection.CreateCommand();
         command.CommandText = """
@@ -419,7 +676,8 @@ public sealed class SqliteClipboardRepository : IClipboardRepository
             """;
         command.ExecuteNonQuery();
         EnsureLastUsedColumn(connection);
-        RemoveInvalidAndDuplicateTextItems(connection);
+        EnsureTextUniquenessMigration(connection);
+        StartupPerformanceLog.Write("storage.database-initialize", initializationTimer.Elapsed);
     }
 
     private static void EnsureLastUsedColumn(SqliteConnection connection)
@@ -441,12 +699,69 @@ public sealed class SqliteClipboardRepository : IClipboardRepository
         alterCommand.ExecuteNonQuery();
     }
 
-    private static void RemoveInvalidAndDuplicateTextItems(SqliteConnection connection)
+    private static void EnsureTextUniquenessMigration(SqliteConnection connection)
+    {
+        const int textUniquenessVersion = 1;
+        var migrationTimer = Stopwatch.StartNew();
+        using (var versionCommand = connection.CreateCommand())
+        {
+            versionCommand.CommandText = "PRAGMA user_version;";
+            if (Convert.ToInt32(versionCommand.ExecuteScalar()) >= textUniquenessVersion)
+            {
+                StartupPerformanceLog.Write("storage.text-cleanup", migrationTimer.Elapsed, 0);
+                return;
+            }
+        }
+
+        // Older releases created this index only after the cleanup had completed.
+        // Use it as a completion marker so the first release with user_version support
+        // does not repeat the full history scan for existing databases.
+        using (var indexCommand = connection.CreateCommand())
+        {
+            indexCommand.CommandText = "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'ux_clipboard_items_text_content_hash');";
+            if (Convert.ToInt32(indexCommand.ExecuteScalar()) != 0)
+            {
+                using var markVersionCommand = connection.CreateCommand();
+                markVersionCommand.CommandText = $"PRAGMA user_version = {textUniquenessVersion};";
+                markVersionCommand.ExecuteNonQuery();
+                StartupPerformanceLog.Write("storage.text-cleanup", migrationTimer.Elapsed, 0);
+                return;
+            }
+        }
+
+        var cleanupTimer = Stopwatch.StartNew();
+        using var transaction = connection.BeginTransaction();
+        var scannedRows = RemoveInvalidAndDuplicateTextItems(connection, transaction);
+        using (var createIndexCommand = connection.CreateCommand())
+        {
+            createIndexCommand.Transaction = transaction;
+            createIndexCommand.CommandText = """
+                CREATE UNIQUE INDEX IF NOT EXISTS ux_clipboard_items_text_content_hash
+                    ON clipboard_items (content_hash)
+                    WHERE type = 'TEXT';
+                """;
+            createIndexCommand.ExecuteNonQuery();
+        }
+
+        using (var markVersionCommand = connection.CreateCommand())
+        {
+            markVersionCommand.Transaction = transaction;
+            markVersionCommand.CommandText = $"PRAGMA user_version = {textUniquenessVersion};";
+            markVersionCommand.ExecuteNonQuery();
+        }
+
+        transaction.Commit();
+        StartupPerformanceLog.Write("storage.text-cleanup", cleanupTimer.Elapsed, scannedRows);
+    }
+
+    private static int RemoveInvalidAndDuplicateTextItems(SqliteConnection connection, SqliteTransaction transaction)
     {
         var invalidIds = new List<string>();
         var seenContentHashes = new HashSet<string>(StringComparer.Ordinal);
+        var scannedRows = 0;
         using (var readCommand = connection.CreateCommand())
         {
+            readCommand.Transaction = transaction;
             readCommand.CommandText = """
                 SELECT id, text_content
                 FROM clipboard_items
@@ -457,6 +772,7 @@ public sealed class SqliteClipboardRepository : IClipboardRepository
             using var reader = readCommand.ExecuteReader();
             while (reader.Read())
             {
+                scannedRows++;
                 var id = reader.GetString(0);
                 var text = reader.IsDBNull(1) ? null : reader.GetString(1);
                 if (string.IsNullOrWhiteSpace(text)
@@ -470,6 +786,7 @@ public sealed class SqliteClipboardRepository : IClipboardRepository
         }
 
         using var deleteCommand = connection.CreateCommand();
+        deleteCommand.Transaction = transaction;
         deleteCommand.CommandText = "DELETE FROM clipboard_items WHERE id = $id;";
         var idParameter = deleteCommand.Parameters.Add("$id", SqliteType.Text);
         foreach (var id in invalidIds)
@@ -478,13 +795,7 @@ public sealed class SqliteClipboardRepository : IClipboardRepository
             deleteCommand.ExecuteNonQuery();
         }
 
-        using var indexCommand = connection.CreateCommand();
-        indexCommand.CommandText = """
-            CREATE UNIQUE INDEX IF NOT EXISTS ux_clipboard_items_text_content_hash
-                ON clipboard_items (content_hash)
-                WHERE type = 'TEXT';
-            """;
-        indexCommand.ExecuteNonQuery();
+        return scannedRows;
     }
 
     private SqliteConnection OpenConnection()

@@ -6,7 +6,19 @@ public interface IClipboardRepository
 {
     ClipboardItem? AddText(string text, string originDeviceId);
 
+    void UpsertRemoteText(ClipboardItem item, bool originatedLocally);
+
+    void UpsertRemoteTexts(IReadOnlyList<ClipboardItem> items, string localDeviceId);
+
+    bool MarkSynced(string id);
+
     ClipboardItem AddImage(ReadOnlyMemory<byte> pngBytes, string originDeviceId);
+
+    ClipboardItem UpsertRemoteImage(string id, string originDeviceId, ReadOnlyMemory<byte> pngBytes, long createdAtUnixMilliseconds);
+
+    bool MarkImageSynced(string id);
+
+    IReadOnlyList<ClipboardItem> GetPendingImages(int limit);
 
     int GetTextCount();
 

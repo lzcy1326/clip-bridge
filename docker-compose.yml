@@ -22,6 +22,9 @@ services:
       CLIPBRIDGE_SERVER_ADDR: 0.0.0.0:8080
       CLIPBRIDGE_JWT_SECRET: ${CLIPBRIDGE_JWT_SECRET:?set CLIPBRIDGE_JWT_SECRET in .env}
       CLIPBRIDGE_DATABASE_URL: postgres://${POSTGRES_USER:-clipbridge_dev}:${POSTGRES_PASSWORD:-clipbridge_dev_only}@postgres:5432/${POSTGRES_DB:-clipbridge}?sslmode=disable
+      CLIPBRIDGE_IMAGE_DIR: /var/lib/clipbridge/images
+    volumes:
+      - clipbridge_images:/var/lib/clipbridge/images
     depends_on:
       postgres:
         condition: service_healthy
@@ -31,3 +34,4 @@ services:
 
 volumes:
   postgres_data:
+  clipbridge_images:
