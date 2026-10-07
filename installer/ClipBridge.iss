@@ -11,6 +11,7 @@ AppVersion={#AppVersion}
 AppPublisher={#AppPublisher}
 DefaultDirName={code:GetPreviousInstallDir}
 UsePreviousAppDir=yes
+UsePreviousTasks=no
 DisableDirPage=no
 DefaultGroupName={#AppName}
 PrivilegesRequired=lowest
@@ -27,7 +28,7 @@ Compression=lzma2
 SolidCompression=yes
 
 [Tasks]
-Name: "autostart"; Description: "开机时自动启动"; Flags: checkedonce
+Name: "autostart"; Description: "开机时自动启动"
 
 [Languages]
 Name: "chinesesimplified"; MessagesFile: "Languages\ChineseSimplified.isl"

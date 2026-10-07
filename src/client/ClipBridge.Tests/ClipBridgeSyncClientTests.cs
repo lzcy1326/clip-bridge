@@ -60,6 +60,30 @@ public sealed class ClipBridgeSyncClientTests
     }
 
     [Fact]
+    public async Task PollingFindsNewRemoteTextAndRaisesHistoryUpdated()
+    {
+        using var temporary = new TemporaryDirectory();
+        await using var server = new LocalSyncTestServer();
+        var repository = new SqliteClipboardRepository(Path.Combine(temporary.Path, "clipbridge.db"));
+        await using var client = new ClipBridgeSyncClient(repository, Path.Combine(temporary.Path, "sync-profiles.json"));
+
+        var historyUpdated = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        client.HistoryUpdated += () => historyUpdated.TrySetResult(true);
+        await client.ActivateDeviceAsync(server.BaseUri);
+        server.AddRemoteText("remote-clip-2", 89, "VM-TEST", "polling-delivery", "polling-hash");
+
+        await historyUpdated.Task.WaitAsync(TimeSpan.FromSeconds(8));
+
+        var received = repository.FindById("remote-clip-2");
+        Assert.NotNull(received);
+        Assert.Equal("polling-delivery", received.TextContent);
+        Assert.Equal("VM-TEST", received.OriginDeviceId);
+        Assert.True(received.Remote);
+        Assert.True(received.Synced);
+        Assert.True(server.HistoryRequests.Count >= 2, "Expected the follow-up short-interval HTTP history poll.");
+    }
+
+    [Fact]
     public async Task RegistersDeviceAnonymouslyAndRequestsPairingWithDiscoveryCode()
     {
         using var temporary = new TemporaryDirectory();
@@ -352,6 +376,7 @@ public sealed class ClipBridgeSyncClientTests
         private const string Cursor = "opaque-cursor+";
         private readonly TcpListener _listener = new(IPAddress.Loopback, 0);
         private readonly CancellationTokenSource _cancellation = new();
+        private readonly ConcurrentQueue<string> _newHistoryItems = new();
         private readonly Task _acceptTask;
         private int _deviceRegistrationCount;
         private int _anonymousDeviceRegistrationCount;
@@ -396,6 +421,17 @@ public sealed class ClipBridgeSyncClientTests
         public void ReturnAlreadyPaired() => Interlocked.Exchange(ref _returnAlreadyPaired, 1);
         public void FailNextPairingDecision() => Interlocked.Exchange(ref _failNextPairingDecision, 1);
         public void DelayNextHistoryResponse(TimeSpan delay) => Interlocked.Exchange(ref _nextHistoryResponseDelayMs, checked((int)delay.TotalMilliseconds));
+        public void AddRemoteText(string id, long originDeviceId, string originDeviceName, string text, string contentHash) =>
+            _newHistoryItems.Enqueue(JsonSerializer.Serialize(new
+            {
+                id,
+                origin_device_id = originDeviceId,
+                origin_device_name = originDeviceName,
+                type = "TEXT",
+                text,
+                content_hash = contentHash,
+                created_at = DateTimeOffset.UtcNow,
+            }));
 
         public async ValueTask DisposeAsync()
         {
@@ -522,7 +558,20 @@ public sealed class ClipBridgeSyncClientTests
                     else if (path == "/api/v1/clips" && method == "GET")
                     {
                         HistoryRequests.Enqueue(target);
-                        responseBody = """{"items":[],"has_more":false}""";
+                        if (_newHistoryItems.TryDequeue(out var nextHistoryItem))
+                        {
+                            using var itemDocument = JsonDocument.Parse(nextHistoryItem);
+                            responseBody = JsonSerializer.Serialize(new
+                            {
+                                items = new[] { itemDocument.RootElement.Clone() },
+                                next_cursor = "poll-cursor",
+                                has_more = false,
+                            });
+                        }
+                        else
+                        {
+                            responseBody = """{"items":[],"has_more":false}""";
+                        }
                     }
                     else if (path == "/api/v1/images" && method == "GET")
                     {
@@ -559,9 +608,23 @@ public sealed class ClipBridgeSyncClientTests
                     else if (path == "/api/v1/clips" && method == "GET")
                     {
                         HistoryRequests.Enqueue(target);
-                        responseBody = target.Contains("after=", StringComparison.Ordinal)
-                            ? """{"items":[],"has_more":false}"""
-                            : """{"items":[{"id":"remote-clip-1","origin_device_id":88,"origin_device_name":"HOST-PC","type":"TEXT","text":"from-host","content_hash":"test-hash","created_at":"2026-09-30T01:02:03Z"}],"next_cursor":"opaque-cursor+","has_more":false}""";
+                        if (target.Contains("after=", StringComparison.Ordinal)
+                            && _newHistoryItems.TryDequeue(out var nextHistoryItem))
+                        {
+                            using var itemDocument = JsonDocument.Parse(nextHistoryItem);
+                            responseBody = JsonSerializer.Serialize(new
+                            {
+                                items = new[] { itemDocument.RootElement.Clone() },
+                                next_cursor = "poll-cursor",
+                                has_more = false,
+                            });
+                        }
+                        else
+                        {
+                            responseBody = target.Contains("after=", StringComparison.Ordinal)
+                                ? """{"items":[],"has_more":false}"""
+                                : """{"items":[{"id":"remote-clip-1","origin_device_id":88,"origin_device_name":"HOST-PC","type":"TEXT","text":"from-host","content_hash":"test-hash","created_at":"2026-09-30T01:02:03Z"}],"next_cursor":"opaque-cursor+","has_more":false}""";
+                        }
                     }
                     else if (path == "/api/v1/images" && method == "GET")
                     {

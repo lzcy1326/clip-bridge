@@ -9,6 +9,7 @@ using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Threading;
 using ClipBridge.Core.Interfaces;
+using ClipBridge.Core.Models;
 using ClipBridge.Core.Services;
 using ClipBridge.Windows;
 
@@ -28,6 +29,8 @@ public partial class MainWindow : Window
     private readonly ClipboardWriter _clipboardWriter = new();
     private readonly PasteManager _pasteManager = new();
     private readonly QuickPasteSelection _quickPasteSelection = new();
+    private string? _lastSynchronizedClipboardItemId;
+    private CancellationTokenSource? _synchronizedClipboardWriteCancellation;
     private bool _isQuickPasteMode;
     private nint _pasteTargetWindowHandle;
     private WindowState _savedWindowState;
@@ -52,6 +55,9 @@ public partial class MainWindow : Window
             handledEventsToo: true);
         HistoryList.ItemsSource = _historyItems;
         _clipboardRepository = ((App)System.Windows.Application.Current).ClipboardRepository;
+        _lastSynchronizedClipboardItemId = _clipboardRepository.GetRecentItems(HistoryLimit)
+            .Where(item => item.Remote)
+            .MaxBy(item => item.CreatedAtUnixMilliseconds)?.Id;
         RefreshHistory();
         var syncClient = ((App)System.Windows.Application.Current).SyncClient;
         syncClient.HistoryUpdated += OnSynchronizedHistoryUpdated;
@@ -68,6 +74,7 @@ public partial class MainWindow : Window
 
     private void OnTextCaptured(string text)
     {
+        CancelPendingSynchronizedClipboardWrite();
         var item = _clipboardRepository.AddText(text, Environment.MachineName);
         if (item is null)
         {
@@ -98,12 +105,104 @@ public partial class MainWindow : Window
     {
         if (!Dispatcher.HasShutdownStarted)
         {
-            Dispatcher.BeginInvoke(RefreshHistory);
+            Dispatcher.BeginInvoke(new Action(ApplySynchronizedHistoryUpdate));
+        }
+    }
+
+    private void ApplySynchronizedHistoryUpdate()
+    {
+        if (Dispatcher.HasShutdownStarted)
+        {
+            return;
+        }
+
+        RefreshHistory();
+
+        var remoteItem = _clipboardRepository.GetRecentItems(HistoryLimit)
+            .Where(item => item.Remote)
+            .MaxBy(item => item.CreatedAtUnixMilliseconds);
+        if (remoteItem is null
+            || string.Equals(_lastSynchronizedClipboardItemId, remoteItem.Id, StringComparison.Ordinal)
+            || (remoteItem.Type == ClipboardItemType.Text && string.IsNullOrEmpty(remoteItem.TextContent))
+            || (remoteItem.Type == ClipboardItemType.Image && string.IsNullOrEmpty(remoteItem.ImagePath)))
+        {
+            return;
+        }
+
+        _lastSynchronizedClipboardItemId = remoteItem.Id;
+        var latestLocalItem = _clipboardRepository.GetRecentItems(HistoryLimit)
+            .Where(item => !item.Remote)
+            .MaxBy(item => item.CreatedAtUnixMilliseconds);
+        if (latestLocalItem is not null
+            && latestLocalItem.CreatedAtUnixMilliseconds >= remoteItem.CreatedAtUnixMilliseconds)
+        {
+            return;
+        }
+
+        CancelPendingSynchronizedClipboardWrite();
+        var cancellation = new CancellationTokenSource();
+        _synchronizedClipboardWriteCancellation = cancellation;
+        _ = WriteSynchronizedClipboardItemAsync(remoteItem, cancellation);
+    }
+
+    private async Task WriteSynchronizedClipboardItemAsync(ClipboardItem item, CancellationTokenSource cancellation)
+    {
+        var text = item.Type == ClipboardItemType.Text ? item.TextContent : null;
+        if (text is not null)
+        {
+            _clipboardMonitor.SuppressTextCapture(text);
+        }
+
+        try
+        {
+            switch (item.Type)
+            {
+                case ClipboardItemType.Text when !string.IsNullOrEmpty(text):
+                    await _clipboardWriter.SetTextAsync(text, cancellation.Token);
+                    break;
+                case ClipboardItemType.Image when !string.IsNullOrEmpty(item.ImagePath):
+                    await _clipboardWriter.SetImageAsync(item.ImagePath, cancellation.Token);
+                    _clipboardMonitor.SuppressCurrentImageClipboardUpdate();
+                    break;
+                default:
+                    return;
+            }
+        }
+        catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
+        {
+            if (text is not null)
+            {
+                _clipboardMonitor.CancelTextCaptureSuppression(text);
+            }
+        }
+        catch (Exception exception)
+        {
+            if (text is not null)
+            {
+                _clipboardMonitor.CancelTextCaptureSuppression(text);
+            }
+
+            System.Diagnostics.Trace.TraceWarning(
+                "Failed to copy synchronized clipboard item {0} to the system clipboard: {1}",
+                item.Id,
+                exception.Message);
+            var description = item.Type == ClipboardItemType.Image ? "图片" : "文字";
+            ((App)System.Windows.Application.Current).SyncClient.ReportStatus($"远端{description}已同步，暂时无法写入系统剪贴板");
+        }
+        finally
+        {
+            if (ReferenceEquals(_synchronizedClipboardWriteCancellation, cancellation))
+            {
+                _synchronizedClipboardWriteCancellation = null;
+            }
+
+            cancellation.Dispose();
         }
     }
 
     private void OnImageCaptured(byte[] pngBytes)
     {
+        CancelPendingSynchronizedClipboardWrite();
         try
         {
             _clipboardRepository.AddImage(pngBytes, "local");
@@ -114,6 +213,13 @@ public partial class MainWindow : Window
             System.Diagnostics.Trace.TraceError("Failed to save clipboard image: {0}", exception);
             Title = "ClipBridge - 跨设备剪贴板 · 图片保存失败";
         }
+    }
+
+    private void CancelPendingSynchronizedClipboardWrite()
+    {
+        var cancellation = _synchronizedClipboardWriteCancellation;
+        _synchronizedClipboardWriteCancellation = null;
+        cancellation?.Cancel();
     }
 
     private void RefreshHistory()
