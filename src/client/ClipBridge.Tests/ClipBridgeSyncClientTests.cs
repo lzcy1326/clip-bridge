@@ -524,6 +524,10 @@ public sealed class ClipBridgeSyncClientTests
                         HistoryRequests.Enqueue(target);
                         responseBody = """{"items":[],"has_more":false}""";
                     }
+                    else if (path == "/api/v1/images" && method == "GET")
+                    {
+                        responseBody = """{"items":[],"has_more":false}""";
+                    }
                     else
                     {
                         statusCode = 404;
@@ -558,6 +562,10 @@ public sealed class ClipBridgeSyncClientTests
                         responseBody = target.Contains("after=", StringComparison.Ordinal)
                             ? """{"items":[],"has_more":false}"""
                             : """{"items":[{"id":"remote-clip-1","origin_device_id":88,"origin_device_name":"HOST-PC","type":"TEXT","text":"from-host","content_hash":"test-hash","created_at":"2026-09-30T01:02:03Z"}],"next_cursor":"opaque-cursor+","has_more":false}""";
+                    }
+                    else if (path == "/api/v1/images" && method == "GET")
+                    {
+                        responseBody = """{"items":[],"has_more":false}""";
                     }
                     else
                     {

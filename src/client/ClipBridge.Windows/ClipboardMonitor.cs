@@ -27,7 +27,7 @@ public sealed class ClipboardMonitor : IDisposable
     private bool _isDisposed;
     private bool _clipboardReadScheduled;
     private int _clipboardReadAttempts;
-    private bool _suppressNextImageCapture;
+    private uint? _suppressedImageClipboardSequenceNumber;
 
     public ClipboardMonitor(Window window)
     {
@@ -63,9 +63,11 @@ public sealed class ClipboardMonitor : IDisposable
         }
     }
 
-    public void SuppressNextImageCapture() => _suppressNextImageCapture = true;
-
-    public void CancelImageCaptureSuppression() => _suppressNextImageCapture = false;
+    public void SuppressCurrentImageClipboardUpdate()
+    {
+        var sequenceNumber = GetClipboardSequenceNumber();
+        _suppressedImageClipboardSequenceNumber = sequenceNumber == 0 ? null : sequenceNumber;
+    }
 
     public void Dispose()
     {
@@ -128,17 +130,21 @@ public sealed class ClipboardMonitor : IDisposable
 
     private void ReadClipboardText()
     {
+        if (_suppressedImageClipboardSequenceNumber is uint suppressedSequenceNumber)
+        {
+            if (GetClipboardSequenceNumber() == suppressedSequenceNumber)
+            {
+                ResetClipboardReadRetry();
+                return;
+            }
+
+            _suppressedImageClipboardSequenceNumber = null;
+        }
+
         try
         {
             if (TryReadClipboardImage(out var imageBytes))
             {
-                if (_suppressNextImageCapture)
-                {
-                    _suppressNextImageCapture = false;
-                    ResetClipboardReadRetry();
-                    return;
-                }
-
                 ImageCaptured?.Invoke(imageBytes);
                 ResetClipboardReadRetry();
                 return;
@@ -413,6 +419,9 @@ public sealed class ClipboardMonitor : IDisposable
     [DllImport("user32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool AddClipboardFormatListener(IntPtr hwnd);
+
+    [DllImport("user32.dll")]
+    private static extern uint GetClipboardSequenceNumber();
 
     [DllImport("user32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]

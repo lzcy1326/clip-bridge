@@ -39,6 +39,23 @@ public partial class App : System.Windows.Application
         SyncClient.PairingRequestReceived += OnPairingRequestReceived;
 
         base.OnStartup(e);
+        var mainWindow = new MainWindow();
+        MainWindow = mainWindow;
+        if (e.Args.Contains("--background", StringComparer.OrdinalIgnoreCase))
+        {
+            // Create the window handle so the clipboard listener and global hotkey
+            // can run, but keep the window out of sight during login startup.
+            mainWindow.ShowInTaskbar = false;
+            mainWindow.WindowState = WindowState.Minimized;
+            mainWindow.Show();
+            mainWindow.Hide();
+            mainWindow.WindowState = WindowState.Normal;
+        }
+        else
+        {
+            mainWindow.Show();
+        }
+
         _trayIconService = new TrayIconService();
         StartupPerformanceLog.Write("app.startup-ready", appStartupTimer.Elapsed);
         _ = SyncClient.RestoreDeviceSessionAsync();

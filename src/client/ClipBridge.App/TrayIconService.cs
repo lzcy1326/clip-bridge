@@ -25,6 +25,13 @@ internal sealed class TrayIconService : IDisposable
         _syncStatusItem = new Forms.ToolStripMenuItem("同步：未连接") { Enabled = false };
         menu.Items.Add(_syncStatusItem);
         menu.Items.Add("连接同步…", null, (_, _) => ShowSyncConnectionWindow());
+        var autoStartItem = new Forms.ToolStripMenuItem("开机时自动启动")
+        {
+            CheckOnClick = true,
+            Checked = StartupRegistration.IsEnabled()
+        };
+        autoStartItem.CheckedChanged += (_, _) => UpdateAutoStart(autoStartItem);
+        menu.Items.Add(autoStartItem);
         menu.Items.Add(new Forms.ToolStripSeparator());
         menu.Items.Add("打开 ClipBridge", null, (_, _) => ShowMainWindow());
         menu.Items.Add(new Forms.ToolStripSeparator());
@@ -87,5 +94,20 @@ internal sealed class TrayIconService : IDisposable
             window.WindowState = WindowState.Normal;
             window.Activate();
         });
+    }
+
+    private void UpdateAutoStart(Forms.ToolStripMenuItem item)
+    {
+        try
+        {
+            StartupRegistration.SetEnabled(item.Checked);
+        }
+        catch (Exception exception)
+        {
+            item.Checked = StartupRegistration.IsEnabled();
+            _notifyIcon.BalloonTipTitle = "ClipBridge";
+            _notifyIcon.BalloonTipText = $"无法更新登录启动设置：{exception.Message}";
+            _notifyIcon.ShowBalloonTip(4000);
+        }
     }
 }

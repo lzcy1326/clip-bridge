@@ -24,7 +24,7 @@ public partial class MainWindow : Window
     private readonly ClipboardMonitor _clipboardMonitor;
     private readonly GlobalHotkey _globalHotkey;
     private readonly IClipboardRepository _clipboardRepository;
-    private readonly ObservableCollection<ClipBridge.Core.Models.ClipboardItem> _historyItems = [];
+    private readonly ObservableCollection<HistoryListEntry> _historyItems = [];
     private readonly ClipboardWriter _clipboardWriter = new();
     private readonly PasteManager _pasteManager = new();
     private readonly QuickPasteSelection _quickPasteSelection = new();
@@ -123,9 +123,10 @@ public partial class MainWindow : Window
         var matchingItems = string.IsNullOrWhiteSpace(query)
             ? _clipboardRepository.GetRecentItems(HistoryLimit)
             : _clipboardRepository.SearchItems(query, HistoryLimit);
+        var sequenceNumber = 0;
         foreach (var item in matchingItems)
         {
-            _historyItems.Add(item);
+            _historyItems.Add(new HistoryListEntry(item, ++sequenceNumber));
         }
 
         if (_isQuickPasteMode)
@@ -135,7 +136,7 @@ public partial class MainWindow : Window
         }
 
         var hotkeyStatus = _hotkeyRegistrationFailed ? " · 快捷键不可用" : string.Empty;
-        Title = $"ClipBridge - 跨设备剪贴板 · {_historyItems.Count} 条{hotkeyStatus}";
+        Title = $"ClipBridge - 跨设备剪贴板{hotkeyStatus}";
         EmptyHistoryText.Text = string.IsNullOrWhiteSpace(query)
             ? "复制的文字或图片会显示在这里。"
             : "没有匹配的记录。";
@@ -157,7 +158,7 @@ public partial class MainWindow : Window
     private void OnHotkeyRegistrationFailed(Exception _)
     {
         _hotkeyRegistrationFailed = true;
-        Title = $"ClipBridge - 跨设备剪贴板 · {_historyItems.Count} 条 · 快捷键不可用";
+        Title = "ClipBridge - 跨设备剪贴板 · 快捷键不可用";
     }
 
     private async void ToggleQuickPasteMode()
@@ -243,22 +244,24 @@ public partial class MainWindow : Window
         if (!_isQuickPasteMode || e.ChangedButton != MouseButton.Left
             || e.OriginalSource is not DependencyObject originalSource
             || ItemsControl.ContainerFromElement(HistoryList, originalSource) is not ListBoxItem listBoxItem
-            || listBoxItem.DataContext is not ClipBridge.Core.Models.ClipboardItem item)
+            || listBoxItem.DataContext is not HistoryListEntry entry)
         {
             return;
         }
 
-        HistoryList.SelectedItem = item;
+        HistoryList.SelectedItem = entry;
         e.Handled = true;
         await PasteSelectedItemAsync();
     }
 
     private async Task PasteSelectedItemAsync()
     {
-        if (HistoryList.SelectedItem is not ClipBridge.Core.Models.ClipboardItem item)
+        if (HistoryList.SelectedItem is not HistoryListEntry entry)
         {
             return;
         }
+
+        var item = entry.Item;
 
         var targetWindowHandle = _pasteTargetWindowHandle;
         Hide();
@@ -291,8 +294,8 @@ public partial class MainWindow : Window
                     await _clipboardWriter.SetTextAsync(item.TextContent);
                     break;
                 case ClipBridge.Core.Models.ClipboardItemType.Image when !string.IsNullOrEmpty(item.ImagePath):
-                    _clipboardMonitor.SuppressNextImageCapture();
                     await _clipboardWriter.SetImageAsync(item.ImagePath);
+                    _clipboardMonitor.SuppressCurrentImageClipboardUpdate();
                     break;
                 default:
                     return false;
@@ -304,10 +307,6 @@ public partial class MainWindow : Window
             if (item.Type == ClipBridge.Core.Models.ClipboardItemType.Text && item.TextContent is not null)
             {
                 _clipboardMonitor.CancelTextCaptureSuppression(item.TextContent);
-            }
-            else
-            {
-                _clipboardMonitor.CancelImageCaptureSuppression();
             }
 
             System.Windows.MessageBox.Show(
