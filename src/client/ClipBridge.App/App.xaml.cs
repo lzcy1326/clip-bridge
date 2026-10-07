@@ -43,13 +43,9 @@ public partial class App : System.Windows.Application
         MainWindow = mainWindow;
         if (e.Args.Contains("--background", StringComparer.OrdinalIgnoreCase))
         {
-            // Create the window handle so the clipboard listener and global hotkey
-            // can run, but keep the window out of sight during login startup.
-            mainWindow.ShowInTaskbar = false;
-            mainWindow.WindowState = WindowState.Minimized;
-            mainWindow.Show();
-            mainWindow.Hide();
-            mainWindow.WindowState = WindowState.Normal;
+            // Create the HWND so the clipboard listener and global hotkey can run,
+            // without showing the window or leaving it with minimized restore bounds.
+            _ = new System.Windows.Interop.WindowInteropHelper(mainWindow).EnsureHandle();
         }
         else
         {
