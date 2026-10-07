@@ -69,6 +69,7 @@ public sealed class ClipBridgeSyncClientTests
 
         var historyUpdated = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         client.HistoryUpdated += () => historyUpdated.TrySetResult(true);
+        server.DisableNotifications();
         await client.ActivateDeviceAsync(server.BaseUri);
         server.AddRemoteText("remote-clip-2", 89, "VM-TEST", "polling-delivery", "polling-hash");
 
@@ -81,6 +82,25 @@ public sealed class ClipBridgeSyncClientTests
         Assert.True(received.Remote);
         Assert.True(received.Synced);
         Assert.True(server.HistoryRequests.Count >= 2, "Expected the follow-up short-interval HTTP history poll.");
+    }
+
+    [Fact]
+    public async Task SseNotificationPullsRemoteTextBeforeFourSecondFallback()
+    {
+        using var temporary = new TemporaryDirectory();
+        await using var server = new LocalSyncTestServer();
+        var repository = new SqliteClipboardRepository(Path.Combine(temporary.Path, "clipbridge.db"));
+        await using var client = new ClipBridgeSyncClient(repository, Path.Combine(temporary.Path, "sync-profiles.json"));
+        var historyUpdated = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        client.HistoryUpdated += () => historyUpdated.TrySetResult(true);
+
+        await client.ActivateDeviceAsync(server.BaseUri);
+        await server.NotificationConnection.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        server.AddRemoteText("remote-clip-sse", 89, "VM-TEST", "sse-delivery", "sse-hash");
+
+        await historyUpdated.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+        Assert.Equal("sse-delivery", repository.FindById("remote-clip-sse")?.TextContent);
     }
 
     [Fact]
@@ -377,6 +397,13 @@ public sealed class ClipBridgeSyncClientTests
         private readonly TcpListener _listener = new(IPAddress.Loopback, 0);
         private readonly CancellationTokenSource _cancellation = new();
         private readonly ConcurrentQueue<string> _newHistoryItems = new();
+        private readonly System.Threading.Channels.Channel<byte> _notificationSignals =
+            System.Threading.Channels.Channel.CreateBounded<byte>(new System.Threading.Channels.BoundedChannelOptions(1)
+            {
+                FullMode = System.Threading.Channels.BoundedChannelFullMode.DropWrite,
+                SingleReader = false,
+                SingleWriter = false,
+            });
         private readonly Task _acceptTask;
         private int _deviceRegistrationCount;
         private int _anonymousDeviceRegistrationCount;
@@ -387,6 +414,7 @@ public sealed class ClipBridgeSyncClientTests
         private int _returnAlreadyPaired;
         private int _failNextPairingDecision;
         private int _nextHistoryResponseDelayMs;
+        private int _disableNotifications;
         private string _activeAccessToken = string.Empty;
         private string? _uploadedId;
         private string? _uploadedText;
@@ -415,13 +443,16 @@ public sealed class ClipBridgeSyncClientTests
         public string? PairingTargetCode => Volatile.Read(ref _pairingTargetCode);
         public ConcurrentQueue<string> HistoryRequests { get; } = new();
         public ConcurrentQueue<Exception> Failures { get; } = new();
+        public TaskCompletionSource<bool> NotificationConnection { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public void ExpireNextAuthorizedRequest() => Interlocked.Exchange(ref _expireNextAuthorizedRequest, 1);
         public void ReturnPendingPairing() => Interlocked.Exchange(ref _returnPendingPairing, 1);
         public void ReturnAlreadyPaired() => Interlocked.Exchange(ref _returnAlreadyPaired, 1);
         public void FailNextPairingDecision() => Interlocked.Exchange(ref _failNextPairingDecision, 1);
+        public void DisableNotifications() => Interlocked.Exchange(ref _disableNotifications, 1);
         public void DelayNextHistoryResponse(TimeSpan delay) => Interlocked.Exchange(ref _nextHistoryResponseDelayMs, checked((int)delay.TotalMilliseconds));
-        public void AddRemoteText(string id, long originDeviceId, string originDeviceName, string text, string contentHash) =>
+        public void AddRemoteText(string id, long originDeviceId, string originDeviceName, string text, string contentHash)
+        {
             _newHistoryItems.Enqueue(JsonSerializer.Serialize(new
             {
                 id,
@@ -432,6 +463,8 @@ public sealed class ClipBridgeSyncClientTests
                 content_hash = contentHash,
                 created_at = DateTimeOffset.UtcNow,
             }));
+            _notificationSignals.Writer.TryWrite(1);
+        }
 
         public async ValueTask DisposeAsync()
         {
@@ -462,6 +495,10 @@ public sealed class ClipBridgeSyncClientTests
                     return;
                 }
                 catch (SocketException) when (_cancellation.IsCancellationRequested)
+                {
+                    return;
+                }
+                catch (ObjectDisposedException) when (_cancellation.IsCancellationRequested)
                 {
                     return;
                 }
@@ -497,6 +534,28 @@ public sealed class ClipBridgeSyncClientTests
                 var method = parts[0];
                 var target = parts[1];
                 var path = target.Split('?', 2)[0];
+
+                if (path == "/api/v1/events" && method == "GET")
+                {
+                    if (Volatile.Read(ref _disableNotifications) == 1)
+                    {
+                        await WriteResponseAsync(stream, 404, "{}", _cancellation.Token);
+                        return;
+                    }
+
+                    var authorized = headers.TryGetValue("Authorization", out var eventAuthorization)
+                        && (eventAuthorization == $"Bearer {Volatile.Read(ref _activeDeviceCredential)}"
+                            || eventAuthorization == $"Bearer {Volatile.Read(ref _activeAccessToken)}");
+                    if (!authorized)
+                    {
+                        await WriteResponseAsync(stream, 401, "{\"error\":\"unauthorized\"}", _cancellation.Token);
+                        return;
+                    }
+
+                    await WriteSseNotificationsAsync(stream, _cancellation.Token);
+                    return;
+                }
+
                 var statusCode = 200;
                 string responseBody;
 
@@ -763,6 +822,24 @@ public sealed class ClipBridgeSyncClientTests
             var header = Encoding.ASCII.GetBytes($"HTTP/1.1 {statusCode} {reason}\r\nContent-Type: application/json\r\nContent-Length: {bodyBytes.Length}\r\nConnection: close\r\n\r\n");
             await stream.WriteAsync(header, cancellationToken);
             await stream.WriteAsync(bodyBytes, cancellationToken);
+        }
+
+        private async Task WriteSseNotificationsAsync(NetworkStream stream, CancellationToken cancellationToken)
+        {
+            var header = Encoding.ASCII.GetBytes("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: keep-alive\r\n\r\n: connected\n\n");
+            await stream.WriteAsync(header, cancellationToken);
+            await stream.FlushAsync(cancellationToken);
+            NotificationConnection.TrySetResult(true);
+
+            while (await _notificationSignals.Reader.WaitToReadAsync(cancellationToken))
+            {
+                while (_notificationSignals.Reader.TryRead(out _))
+                {
+                    var message = Encoding.UTF8.GetBytes("id: 1\nevent: clipboard\ndata: changed\n\n");
+                    await stream.WriteAsync(message, cancellationToken);
+                    await stream.FlushAsync(cancellationToken);
+                }
+            }
         }
     }
 

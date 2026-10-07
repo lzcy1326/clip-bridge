@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -142,6 +143,78 @@ func TestHealthReturnsOk(t *testing.T) {
 	}
 	if body.Status != "ok" {
 		t.Fatalf("expected status body %q, got %q", "ok", body.Status)
+	}
+}
+
+func TestTextUploadNotifiesSSESubscribersWithoutClipboardContent(t *testing.T) {
+	verifier := &tokenVerifierStub{userID: 42, token: "signed-token"}
+	uploader := &clipUploaderStub{}
+	router := NewRouter(nil, verifier, nil, uploader)
+	server := httptest.NewServer(router)
+	defer server.Close()
+
+	streamContext, cancelStream := context.WithCancel(context.Background())
+	defer cancelStream()
+	streamRequest, err := http.NewRequestWithContext(streamContext, http.MethodGet, server.URL+"/api/v1/events", nil)
+	if err != nil {
+		t.Fatalf("create stream request: %v", err)
+	}
+	streamRequest.Header.Set("Authorization", "Bearer signed-token")
+	streamResponse, err := server.Client().Do(streamRequest)
+	if err != nil {
+		t.Fatalf("open event stream: %v", err)
+	}
+	defer streamResponse.Body.Close()
+	if streamResponse.StatusCode != http.StatusOK || streamResponse.Header.Get("Content-Type") != "text/event-stream" {
+		t.Fatalf("unexpected stream response: %d %q", streamResponse.StatusCode, streamResponse.Header.Get("Content-Type"))
+	}
+
+	request, err := http.NewRequest(http.MethodPost, server.URL+"/api/v1/clips", strings.NewReader(`{"id":"`+validTestClipID+`","text":"private clipboard payload"}`))
+	if err != nil {
+		t.Fatalf("create upload request: %v", err)
+	}
+	request.Header.Set("Authorization", "Bearer signed-token")
+	request.Header.Set("Content-Type", "application/json")
+	uploadResponse, err := server.Client().Do(request)
+	if err != nil {
+		t.Fatalf("upload clipboard text: %v", err)
+	}
+	_ = uploadResponse.Body.Close()
+	if uploadResponse.StatusCode != http.StatusCreated {
+		t.Fatalf("upload status = %d, want %d", uploadResponse.StatusCode, http.StatusCreated)
+	}
+
+	lines := make(chan string, 8)
+	go func() {
+		scanner := bufio.NewScanner(streamResponse.Body)
+		for scanner.Scan() {
+			lines <- scanner.Text()
+			if scanner.Text() == "data: changed" {
+				return
+			}
+		}
+	}()
+	seenEvent := false
+	seenData := false
+	deadline := time.After(2 * time.Second)
+	for !seenData {
+		select {
+		case line := <-lines:
+			if strings.HasPrefix(line, "event: ") {
+				seenEvent = line == "event: clipboard"
+			}
+			if strings.HasPrefix(line, "data: ") {
+				seenData = line == "data: changed"
+				if strings.Contains(line, "private clipboard payload") {
+					t.Fatal("SSE notification leaked clipboard content")
+				}
+			}
+		case <-deadline:
+			t.Fatal("timed out waiting for SSE notification")
+		}
+	}
+	if !seenEvent {
+		t.Fatal("SSE notification did not use clipboard event type")
 	}
 }
 

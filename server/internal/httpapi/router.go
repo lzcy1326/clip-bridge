@@ -151,8 +151,59 @@ func NewRouterWithImages(
 ) *gin.Engine {
 	router := gin.New()
 	router.Use(gin.Logger(), gin.Recovery())
+	notificationHub := newClipNotificationHub()
 	router.GET("/health", func(context *gin.Context) {
 		context.JSON(http.StatusOK, gin.H{"status": "ok"})
+	})
+	router.GET("/api/v1/events", func(context *gin.Context) {
+		userID, principal, deviceAuthenticated, ok := resolveRequestIdentity(context, tokenVerifier, pairingService)
+		if !ok {
+			context.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+			return
+		}
+		ownerID := userID
+		if deviceAuthenticated {
+			ownerID = principal.OwnerID
+		}
+		flusher, supported := context.Writer.(http.Flusher)
+		if !supported {
+			context.JSON(http.StatusInternalServerError, gin.H{"error": "streaming_unavailable"})
+			return
+		}
+		context.Header("Content-Type", "text/event-stream")
+		context.Header("Cache-Control", "no-cache, no-transform")
+		context.Header("Connection", "keep-alive")
+		context.Header("X-Accel-Buffering", "no")
+		context.Status(http.StatusOK)
+		channel, unsubscribe := notificationHub.subscribe(ownerID)
+		defer unsubscribe()
+		_, _ = context.Writer.Write([]byte(": connected\n\n"))
+		flusher.Flush()
+		heartbeat := time.NewTicker(20 * time.Second)
+		defer heartbeat.Stop()
+		maxStreamAge := time.NewTimer(5 * time.Minute)
+		defer maxStreamAge.Stop()
+		for {
+			select {
+			case notification, open := <-channel:
+				if !open {
+					return
+				}
+				if _, err := fmt.Fprintf(context.Writer, "id: %d\nevent: clipboard\ndata: changed\n\n", notification.id); err != nil {
+					return
+				}
+				flusher.Flush()
+			case <-heartbeat.C:
+				if _, err := context.Writer.Write([]byte(": heartbeat\n\n")); err != nil {
+					return
+				}
+				flusher.Flush()
+			case <-maxStreamAge.C:
+				return
+			case <-context.Request.Context().Done():
+				return
+			}
+		}
 	})
 	limiter := newLoginLimiter()
 	deviceRegistrationLimiter := newLoginLimiter()
@@ -426,6 +477,12 @@ func NewRouterWithImages(
 		status := http.StatusCreated
 		if duplicate {
 			status = http.StatusOK
+		} else {
+			ownerID := userID
+			if deviceAuthenticated {
+				ownerID = principal.OwnerID
+			}
+			notificationHub.publish(ownerID)
 		}
 		context.JSON(status, uploaded)
 	})
@@ -500,6 +557,12 @@ func NewRouterWithImages(
 		status := http.StatusCreated
 		if duplicate {
 			status = http.StatusOK
+		} else {
+			ownerID := userID
+			if deviceAuthenticated {
+				ownerID = principal.OwnerID
+			}
+			notificationHub.publish(ownerID)
 		}
 		context.JSON(status, uploaded)
 	})

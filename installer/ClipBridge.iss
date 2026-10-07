@@ -2,7 +2,7 @@
 #define AppVersion "1.0.0"
 #define AppPublisher "ClipBridge"
 #define AppExeName "ClipBridge.App.exe"
-#define PublishDir "..\artifacts\ClipBridge-staging"
+#define PublishDir "..\artifacts\ClipBridge"
 
 [Setup]
 AppId={{8A32940D-17B9-4D1B-9E87-09D44CC0BF4E}

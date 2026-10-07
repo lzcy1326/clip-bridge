@@ -26,6 +26,7 @@ public sealed class ClipBridgeSyncClient : IAsyncDisposable
     private CancellationTokenSource? _pollCancellation;
     private Task? _pollTask;
     private Task? _imagePollTask;
+    private Task? _notificationTask;
     private string? _accessToken;
     private bool _deviceAuthentication;
     private string? _sessionUsername;
@@ -118,6 +119,7 @@ public sealed class ClipBridgeSyncClient : IAsyncDisposable
         _pollCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         _pollTask = PollLoopAsync(_pollCancellation.Token);
         _imagePollTask = ImagePollLoopAsync(_pollCancellation.Token, immediateFirstCycle: true);
+        _notificationTask = NotificationLoopAsync(_pollCancellation.Token);
     }
 
     public async Task ActivateDeviceAsync(Uri serverUri, CancellationToken cancellationToken = default)
@@ -682,6 +684,123 @@ public sealed class ClipBridgeSyncClient : IAsyncDisposable
         _pollCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         _pollTask = PollLoopAsync(_pollCancellation.Token, immediateFirstCycle, reportRestoreSuccess);
         _imagePollTask = ImagePollLoopAsync(_pollCancellation.Token, immediateFirstCycle: true);
+        _notificationTask = NotificationLoopAsync(_pollCancellation.Token);
+    }
+
+    private async Task NotificationLoopAsync(CancellationToken cancellationToken)
+    {
+        var retryAttempt = 0;
+        while (!cancellationToken.IsCancellationRequested && IsConnected && _serverUri is not null)
+        {
+            var streamConnectedAt = DateTimeOffset.MinValue;
+            try
+            {
+                using var response = await SendAuthenticatedAsync(async (token, ct) =>
+                {
+                    using var request = new HttpRequestMessage(HttpMethod.Get, new Uri(_serverUri, "api/v1/events"));
+                    request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+                    request.Headers.Accept.ParseAdd("text/event-stream");
+                    return await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
+                }, cancellationToken).ConfigureAwait(false);
+                if (response is null)
+                {
+                    return;
+                }
+
+                response.EnsureSuccessStatusCode();
+                if (!string.Equals(response.Content.Headers.ContentType?.MediaType, "text/event-stream", StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new InvalidDataException("Server returned an invalid clipboard notification stream.");
+                }
+
+                streamConnectedAt = DateTimeOffset.UtcNow;
+                // Subscribe first, then catch up by cursor so there is no gap between
+                // history pull and event subscription. SSE is only a wakeup channel.
+                await PullAvailableHistoryAsync(cancellationToken).ConfigureAwait(false);
+                await PullAvailableImagesAsync(cancellationToken).ConfigureAwait(false);
+
+                await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+                using var reader = new StreamReader(stream);
+                string? eventName = null;
+                var hasClipboardData = false;
+                while (!cancellationToken.IsCancellationRequested)
+                {
+                    var line = await reader.ReadLineAsync(cancellationToken).ConfigureAwait(false);
+                    if (line is null)
+                    {
+                        throw new IOException("Server closed the clipboard notification stream.");
+                    }
+
+                    if (line.Length == 0)
+                    {
+                        if (string.Equals(eventName, "clipboard", StringComparison.Ordinal) && hasClipboardData)
+                        {
+                            await PullAvailableHistoryAsync(cancellationToken).ConfigureAwait(false);
+                            await PullAvailableImagesAsync(cancellationToken).ConfigureAwait(false);
+                        }
+
+                        eventName = null;
+                        hasClipboardData = false;
+                        continue;
+                    }
+
+                    if (line[0] == ':')
+                    {
+                        continue;
+                    }
+
+                    var separator = line.IndexOf(':');
+                    var field = separator < 0 ? line : line[..separator];
+                    var value = separator < 0 ? string.Empty : line[(separator + 1)..].TrimStart(' ');
+                    if (field == "event")
+                    {
+                        eventName = value;
+                    }
+                    else if (field == "data" && value == "changed")
+                    {
+                        hasClipboardData = true;
+                    }
+                }
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                return;
+            }
+            catch (Exception exception) when (exception is HttpRequestException or IOException or InvalidDataException or TaskCanceledException)
+            {
+                if (cancellationToken.IsCancellationRequested || !IsConnected)
+                {
+                    return;
+                }
+
+                if (streamConnectedAt != DateTimeOffset.MinValue
+                    && DateTimeOffset.UtcNow - streamConnectedAt >= TimeSpan.FromSeconds(30))
+                {
+                    retryAttempt = 0;
+                }
+                Trace.TraceInformation("ClipBridge SSE notification stream disconnected: {0}", exception.Message);
+            }
+            catch (Exception exception)
+            {
+                if (streamConnectedAt != DateTimeOffset.MinValue
+                    && DateTimeOffset.UtcNow - streamConnectedAt >= TimeSpan.FromSeconds(30))
+                {
+                    retryAttempt = 0;
+                }
+                Trace.TraceError("ClipBridge SSE notification stream failed: {0}", exception);
+            }
+
+            retryAttempt = Math.Min(retryAttempt + 1, 5);
+            var delaySeconds = Math.Min(30, 1 << (retryAttempt - 1));
+            try
+            {
+                await Task.Delay(TimeSpan.FromSeconds(delaySeconds) + TimeSpan.FromMilliseconds(Random.Shared.Next(0, 251)), cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                return;
+            }
+        }
     }
 
     private async Task PollPendingPairingsAsync(CancellationToken cancellationToken)
@@ -986,10 +1105,22 @@ public sealed class ClipBridgeSyncClient : IAsyncDisposable
             }
         }
 
+        if (_notificationTask is not null)
+        {
+            try
+            {
+                await _notificationTask.ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+            }
+        }
+
         _pollCancellation.Dispose();
         _pollCancellation = null;
         _pollTask = null;
         _imagePollTask = null;
+        _notificationTask = null;
     }
 
     private sealed record LoginRequest([property: JsonPropertyName("username")] string Username, [property: JsonPropertyName("password")] string Password);
