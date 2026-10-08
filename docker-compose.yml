@@ -1,0 +1,87 @@
+services:
+  initialize-secrets:
+    image: postgres:18.6-alpine3.24
+    user: "0:0"
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        umask 077
+        if [ ! -s /run/clipbridge-secrets/postgres_password ]; then
+          if [ -n "$${POSTGRES_PASSWORD}" ]; then
+            printf '%s' "$${POSTGRES_PASSWORD}" > /run/clipbridge-secrets/postgres_password
+          else
+            od -An -N24 -tx1 /dev/urandom | tr -d ' \n' > /run/clipbridge-secrets/postgres_password
+          fi
+        fi
+        if [ ! -s /run/clipbridge-secrets/jwt_secret ]; then
+          if [ -n "$${CLIPBRIDGE_JWT_SECRET}" ]; then
+            printf '%s' "$${CLIPBRIDGE_JWT_SECRET}" > /run/clipbridge-secrets/jwt_secret
+          else
+            od -An -N32 -tx1 /dev/urandom | tr -d ' \n' > /run/clipbridge-secrets/jwt_secret
+          fi
+        fi
+        if [ ! -s /run/clipbridge-secrets/database_url ]; then
+          password="$$(cat /run/clipbridge-secrets/postgres_password)"
+          printf 'postgres://%s:%s@postgres:5432/%s?sslmode=disable' "$${POSTGRES_USER}" "$${password}" "$${POSTGRES_DB}" > /run/clipbridge-secrets/database_url
+        fi
+        chmod 0444 /run/clipbridge-secrets/postgres_password /run/clipbridge-secrets/jwt_secret /run/clipbridge-secrets/database_url
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-clipbridge}
+      POSTGRES_USER: ${POSTGRES_USER:-clipbridge_dev}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-}
+      CLIPBRIDGE_JWT_SECRET: ${CLIPBRIDGE_JWT_SECRET:-}
+    volumes:
+      - clipbridge_secrets:/run/clipbridge-secrets
+    restart: "no"
+
+  postgres:
+    image: postgres:18.6-alpine3.24
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-clipbridge}
+      POSTGRES_USER: ${POSTGRES_USER:-clipbridge_dev}
+      POSTGRES_PASSWORD_FILE: /run/clipbridge-secrets/postgres_password
+    volumes:
+      - postgres_data:/var/lib/postgresql
+      - clipbridge_secrets:/run/clipbridge-secrets:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+    restart: unless-stopped
+    depends_on:
+      initialize-secrets:
+        condition: service_completed_successfully
+
+  server:
+    image: clipbridge-server:1.0.0
+    build:
+      context: ./server
+    environment:
+      CLIPBRIDGE_SERVER_ADDR: 0.0.0.0:8080
+      CLIPBRIDGE_DATABASE_URL: ${CLIPBRIDGE_DATABASE_URL:-}
+      CLIPBRIDGE_DATABASE_URL_FILE: /run/clipbridge-secrets/database_url
+      CLIPBRIDGE_JWT_SECRET: ${CLIPBRIDGE_JWT_SECRET:-}
+      CLIPBRIDGE_JWT_SECRET_FILE: /run/clipbridge-secrets/jwt_secret
+      CLIPBRIDGE_BOOTSTRAP_ADMIN_PASSWORD: ${CLIPBRIDGE_BOOTSTRAP_ADMIN_PASSWORD:-}
+      CLIPBRIDGE_IMAGE_DIR: /var/lib/clipbridge/images
+      CLIPBRIDGE_HISTORY_RETENTION_DAYS: ${CLIPBRIDGE_HISTORY_RETENTION_DAYS:-15}
+      CLIPBRIDGE_HISTORY_MAX_ITEMS: ${CLIPBRIDGE_HISTORY_MAX_ITEMS:-500}
+      CLIPBRIDGE_HISTORY_MAX_BYTES: ${CLIPBRIDGE_HISTORY_MAX_BYTES:-0}
+    volumes:
+      - clipbridge_images:/var/lib/clipbridge/images
+      - clipbridge_secrets:/run/clipbridge-secrets:ro
+    depends_on:
+      initialize-secrets:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+    ports:
+      - "${CLIPBRIDGE_SERVER_BIND:-0.0.0.0}:${CLIPBRIDGE_SERVER_PORT:-10002}:8080"
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  clipbridge_images:
+  clipbridge_secrets:

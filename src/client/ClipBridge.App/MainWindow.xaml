@@ -1,0 +1,175 @@
+<Window x:Class="ClipBridge.App.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:app="clr-namespace:ClipBridge.App"
+        xmlns:core="clr-namespace:ClipBridge.Core.Models;assembly=ClipBridge.Core"
+        Title="ClipBridge - 跨设备剪贴板" Height="620" Width="620"
+        Icon="pack://application:,,,/ClipBridge;component/Assets/Icons/clipbridge.ico"
+        ShowInTaskbar="False"
+        MinHeight="360" MinWidth="420"
+        WindowStartupLocation="CenterScreen"
+        Background="#F4F6F8"
+        PreviewKeyDown="Window_PreviewKeyDown"
+        Closing="MainWindow_Closing">
+    <Window.Resources>
+        <app:HistoryPreviewTextConverter x:Key="HistoryPreviewTextConverter" />
+        <app:ImagePathToBitmapSourceConverter x:Key="ImagePathToBitmapSourceConverter" />
+    </Window.Resources>
+    <Grid Margin="8">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <Border Grid.Row="0" CornerRadius="4" Background="White" BorderBrush="#D5DCE2" BorderThickness="1">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                </Grid.RowDefinitions>
+                <Border Grid.Row="0" Margin="8,8,8,6" CornerRadius="3"
+                        Background="#FFFFFF" BorderBrush="#D5DCE2" BorderThickness="1">
+                    <Grid>
+                        <TextBox x:Name="HistorySearchBox" TextChanged="HistorySearchBox_TextChanged"
+                                 Padding="8,5" BorderThickness="0" Background="Transparent"
+                                 FontSize="13" Foreground="#263442"
+                                 ToolTip="搜索本地文本历史" />
+                        <TextBlock x:Name="SearchPlaceholderText" Text="搜索历史…"
+                                   Margin="10,0,0,0" VerticalAlignment="Center"
+                                   Foreground="#82909B" IsHitTestVisible="False" />
+                    </Grid>
+                </Border>
+                <ListBox x:Name="HistoryList"
+                         Grid.Row="1"
+                         Margin="1"
+                         AlternationCount="1000"
+                         BorderThickness="0"
+                         Background="Transparent"
+                         ScrollViewer.CanContentScroll="True"
+                         VirtualizingPanel.IsVirtualizing="True"
+                         VirtualizingPanel.VirtualizationMode="Recycling"
+                         SelectionChanged="HistoryList_SelectionChanged">
+                    <ListBox.ItemContainerStyle>
+                        <Style TargetType="ListBoxItem">
+                            <Setter Property="Padding" Value="4,0" />
+                            <Setter Property="Height" Value="34" />
+                            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                            <Setter Property="VerticalContentAlignment" Value="Stretch" />
+                            <Setter Property="BorderBrush" Value="#E2E6EA" />
+                            <Setter Property="BorderThickness" Value="0,0,0,1" />
+                            <Setter Property="Background" Value="#FFFFFF" />
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding RelativeSource={RelativeSource Self}, Path=(ItemsControl.AlternationIndex)}" Value="1">
+                                    <Setter Property="Background" Value="#F0F3F6" />
+                                </DataTrigger>
+                                <Trigger Property="IsMouseOver" Value="True">
+                                    <Setter Property="Background" Value="#E6F0FA" />
+                                </Trigger>
+                                <Trigger Property="IsSelected" Value="True">
+                                    <Setter Property="Background" Value="#D8E8F6" />
+                                    <Setter Property="BorderBrush" Value="#7EA9CE" />
+                                </Trigger>
+                            </Style.Triggers>
+                        </Style>
+                    </ListBox.ItemContainerStyle>
+                    <ListBox.ItemTemplate>
+                        <DataTemplate>
+                            <Grid VerticalAlignment="Stretch"
+                                  ToolTipService.InitialShowDelay="800">
+                                <Grid.ToolTip>
+                                    <ToolTip DataContext="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource Self}}"
+                                             Placement="MousePoint" HorizontalOffset="0" VerticalOffset="0"
+                                             Opened="HistoryToolTip_Opened"
+                                             MaxWidth="440" Background="#FFFFFF"
+                                             BorderBrush="#C8D2DC" Padding="12">
+                                        <StackPanel>
+                                            <ScrollViewer MaxHeight="420"
+                                                          VerticalScrollBarVisibility="Auto"
+                                                          HorizontalScrollBarVisibility="Disabled">
+                                                <TextBlock Text="{Binding TextContent}" MaxWidth="410"
+                                                           TextWrapping="Wrap"
+                                                           FontSize="13" Foreground="#263442" />
+                                            </ScrollViewer>
+                                            <Separator Margin="0,8" />
+                                            <Grid>
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="72" />
+                                                    <ColumnDefinition Width="*" />
+                                                </Grid.ColumnDefinitions>
+                                                <Grid.RowDefinitions>
+                                                    <RowDefinition Height="Auto" />
+                                                    <RowDefinition Height="Auto" />
+                                                    <RowDefinition Height="Auto" />
+                                                </Grid.RowDefinitions>
+                                                <TextBlock Text="复制时间" FontSize="11" Foreground="#71808D" />
+                                                <TextBlock Grid.Column="1"
+                                                           Text="{Binding CreatedAt, StringFormat='{}{0:yyyy-MM-dd HH:mm:ss}'}"
+                                                           FontSize="11" Foreground="#263442" />
+                                                <TextBlock Grid.Row="1" Text="来源设备" Margin="0,4,0,0"
+                                                           FontSize="11" Foreground="#71808D" />
+                                                <TextBlock Grid.Row="1" Grid.Column="1"
+                                                           Text="{Binding OriginDeviceId}" Margin="0,4,0,0"
+                                                           FontSize="11" Foreground="#263442" />
+                                                <TextBlock Grid.Row="2" Text="最近使用" Margin="0,4,0,0"
+                                                           FontSize="11" Foreground="#71808D" />
+                                                <TextBlock Grid.Row="2" Grid.Column="1"
+                                                           Text="{Binding LastUsedAt, StringFormat='{}{0:yyyy-MM-dd HH:mm:ss}', TargetNullValue=未使用}"
+                                                           Margin="0,4,0,0" FontSize="11" Foreground="#263442" />
+                                            </Grid>
+                                        </StackPanel>
+                                    </ToolTip>
+                                </Grid.ToolTip>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="22" />
+                                    <ColumnDefinition Width="1" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Text="{Binding SequenceNumber}"
+                                           HorizontalAlignment="Left" VerticalAlignment="Center"
+                                           FontSize="11" Foreground="#8493A0" />
+                                <Border Grid.Column="1" Width="1"
+                                        Background="#D5DCE2" VerticalAlignment="Stretch" />
+                                <Grid Grid.Column="2" VerticalAlignment="Center">
+                                    <TextBlock Text="{Binding TextContent, Converter={StaticResource HistoryPreviewTextConverter}}"
+                                               Margin="8,0,2,0"
+                                               VerticalAlignment="Center"
+                                               TextTrimming="CharacterEllipsis"
+                                               TextWrapping="NoWrap"
+                                               FontSize="13" Foreground="#263442">
+                                        <TextBlock.Style>
+                                            <Style TargetType="TextBlock">
+                                                <Setter Property="Visibility" Value="Visible" />
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding Type}" Value="{x:Static core:ClipboardItemType.Image}">
+                                                        <Setter Property="Visibility" Value="Collapsed" />
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </TextBlock.Style>
+                                    </TextBlock>
+                                    <Image Source="{Binding ImagePath, Converter={StaticResource ImagePathToBitmapSourceConverter}}"
+                                           Width="28" Height="28"
+                                           HorizontalAlignment="Left" VerticalAlignment="Center"
+                                           Stretch="Uniform" SnapsToDevicePixels="True">
+                                        <Image.Style>
+                                            <Style TargetType="Image">
+                                                <Setter Property="Visibility" Value="Collapsed" />
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding Type}" Value="{x:Static core:ClipboardItemType.Image}">
+                                                        <Setter Property="Visibility" Value="Visible" />
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </Image.Style>
+                                    </Image>
+                                </Grid>
+                            </Grid>
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
+                <TextBlock x:Name="EmptyHistoryText" Text="复制的文字或图片会显示在这里。"
+                           HorizontalAlignment="Center" VerticalAlignment="Center"
+                           FontSize="12" Foreground="#82909B" IsHitTestVisible="False" />
+            </Grid>
+        </Border>
+    </Grid>
+</Window>
