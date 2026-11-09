@@ -237,6 +237,9 @@ func (store *Store) uploadImage(ctx context.Context, userID, ownerID, deviceID i
 	if userID <= 0 && ownerID <= 0 {
 		return ImageClip{}, false, ErrInvalidImageUpload
 	}
+	store.imageObjectMu.Lock()
+	defer store.imageObjectMu.Unlock()
+
 	var err error
 	upload, err = NormalizeImageUpload(upload)
 	if err != nil {

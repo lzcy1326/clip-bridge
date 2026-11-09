@@ -41,7 +41,8 @@ public sealed class PasteManagerTests
 
                 return activationRequests == 3;
             },
-            (_, _) => Task.CompletedTask);
+            (_, _) => Task.CompletedTask,
+            target => target);
 
         var restored = await manager.RestoreForegroundWindowForPasteAsync(42);
 
@@ -113,5 +114,15 @@ public sealed class PasteManagerTests
         () => foregroundWindow,
         isWindow,
         setForegroundWindow,
-        (_, _) => Task.CompletedTask);
+        (_, _) => Task.CompletedTask,
+        target => target);
+
+    [Fact]
+    public async Task RestoreForegroundWindowForPasteAsync_WhenNoInputHasFocus_SkipsPaste()
+    {
+        var manager = new PasteManager(() => 42, _ => true, _ => true,
+            (_, _) => Task.CompletedTask, _ => nint.Zero);
+
+        Assert.False(await manager.RestoreForegroundWindowForPasteAsync(42));
+    }
 }

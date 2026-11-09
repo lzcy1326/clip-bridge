@@ -32,6 +32,7 @@ internal sealed class TrayIconService : IDisposable
         };
         autoStartItem.CheckedChanged += (_, _) => UpdateAutoStart(autoStartItem);
         menu.Items.Add(autoStartItem);
+        menu.Items.Add("历史清理设置…", null, (_, _) => ShowHistoryRetentionWindow());
         menu.Items.Add(new Forms.ToolStripSeparator());
         menu.Items.Add("打开 ClipBridge", null, (_, _) => ShowMainWindow());
         menu.Items.Add(new Forms.ToolStripSeparator());
@@ -72,6 +73,11 @@ internal sealed class TrayIconService : IDisposable
     private static void ShowSyncConnectionWindow()
     {
         WpfApplication.Current.Dispatcher.Invoke(() => ((App)WpfApplication.Current).ShowSyncConnectionWindow());
+    }
+
+    private static void ShowHistoryRetentionWindow()
+    {
+        WpfApplication.Current.Dispatcher.Invoke(() => ((App)WpfApplication.Current).ShowHistoryRetentionWindow());
     }
 
     private static void ShowMainWindow()

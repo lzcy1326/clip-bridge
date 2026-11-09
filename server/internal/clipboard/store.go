@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -99,6 +100,7 @@ func DecodeCursor(value string) (*Cursor, error) {
 type Store struct {
 	pool           *pgxpool.Pool
 	imageDirectory string
+	imageObjectMu  sync.Mutex
 }
 
 func Open(ctx context.Context, databaseURL string, imageDirectory ...string) (*Store, error) {

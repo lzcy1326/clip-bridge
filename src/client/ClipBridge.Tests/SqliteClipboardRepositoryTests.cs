@@ -95,6 +95,59 @@ public sealed class SqliteClipboardRepositoryTests : IDisposable
     }
 
     [Fact]
+    public void CleanupHistory_RemovesExpiredSynchronizedItemsAndKeepsPendingItems()
+    {
+        var repository = new SqliteClipboardRepository(DatabasePath);
+        var expired = repository.AddText("expired history", "local")!;
+        Assert.True(repository.MarkSynced(expired.Id));
+        var pending = repository.AddText("pending upload", "local")!;
+        using (var connection = OpenDatabase())
+        using (var command = connection.CreateCommand())
+        {
+            command.CommandText = "UPDATE clipboard_items SET created_at = $created_at WHERE id = $id;";
+            command.Parameters.AddWithValue("$created_at", DateTimeOffset.UtcNow.AddDays(-10).ToUnixTimeMilliseconds());
+            command.Parameters.AddWithValue("$id", expired.Id);
+            command.ExecuteNonQuery();
+        }
+
+        var result = repository.CleanupHistory(retentionDays: 1, maximumContentBytes: 0);
+
+        Assert.Equal(1, result.DeletedItems);
+        Assert.Null(repository.FindById(expired.Id));
+        Assert.NotNull(repository.FindById(pending.Id));
+    }
+
+    [Fact]
+    public void CleanupHistory_EnforcesContentBudgetAndDeletesUnreferencedImageFiles()
+    {
+        var repository = new SqliteClipboardRepository(DatabasePath);
+        var oldImage = repository.AddImage(new byte[] { 1, 2, 3, 4 }, "local");
+        Assert.True(repository.MarkImageSynced(oldImage.Id));
+        repository.AddText("newest", "local");
+        Assert.True(repository.MarkSynced(Assert.Single(repository.GetRecentTextItems(1)).Id));
+
+        var result = repository.CleanupHistory(retentionDays: 0, maximumContentBytes: Encoding.UTF8.GetByteCount("newest"));
+
+        Assert.Equal(1, result.DeletedItems);
+        Assert.Null(repository.FindById(oldImage.Id));
+        Assert.False(File.Exists(oldImage.ImagePath));
+        Assert.Equal(4, result.ReclaimedImageBytes);
+        Assert.Equal("newest", Assert.Single(repository.GetRecentTextItems(1)).TextContent);
+    }
+
+    [Fact]
+    public void CleanupHistory_WithZeroLimitsDoesNotDeleteHistory()
+    {
+        var repository = new SqliteClipboardRepository(DatabasePath);
+        var item = repository.AddText("keep forever", "local");
+
+        var result = repository.CleanupHistory(retentionDays: 0, maximumContentBytes: 0);
+
+        Assert.Equal(0, result.DeletedItems);
+        Assert.NotNull(repository.FindById(item!.Id));
+    }
+
+    [Fact]
     public void GetRecentTextItems_ReturnsNewestFirstAndHonorsLimit()
     {
         var repository = new SqliteClipboardRepository(DatabasePath);
@@ -468,5 +521,16 @@ public sealed class SqliteClipboardRepositoryTests : IDisposable
         var normalized = text.Normalize(NormalizationForm.FormC);
         var contentHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes("TEXT" + normalized))).ToLowerInvariant();
         return new ClipboardItem(id, originDeviceId, ClipboardItemType.Text, text, null, contentHash, createdAt, true, true);
+    }
+
+    private SqliteConnection OpenDatabase()
+    {
+        var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = DatabasePath,
+            Mode = SqliteOpenMode.ReadWrite
+        }.ToString());
+        connection.Open();
+        return connection;
     }
 }

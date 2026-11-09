@@ -14,10 +14,13 @@ public partial class App : System.Windows.Application
     private readonly Dictionary<string, PairingRequestWindow> _pairingRequestWindows = new(StringComparer.Ordinal);
     private TrayIconService? _trayIconService;
     private SyncConnectionWindow? _syncConnectionWindow;
+    private HistoryRetentionWindow? _historyRetentionWindow;
+    private LocalHistoryCleanupService? _historyCleanupService;
 
     public IClipboardRepository ClipboardRepository { get; private set; } = null!;
     public ClipBridgeSyncClient SyncClient { get; private set; } = null!;
     public string LocalDeviceCode { get; internal set; } = string.Empty;
+    public string HistoryRetentionSettingsPath { get; private set; } = string.Empty;
 
     protected override void OnStartup(StartupEventArgs e)
     {
@@ -27,8 +30,10 @@ public partial class App : System.Windows.Application
             "ClipBridge");
         StartupPerformanceLog.Configure(Path.Combine(appDataDirectory, "startup-performance.log"));
         var startupTimer = Stopwatch.StartNew();
-        ClipboardRepository = new SqliteClipboardRepository(
-            Path.Combine(appDataDirectory, "clipbridge.db"));
+        var localRepository = new SqliteClipboardRepository(Path.Combine(appDataDirectory, "clipbridge.db"));
+        ClipboardRepository = localRepository;
+        HistoryRetentionSettingsPath = Path.Combine(appDataDirectory, "history-retention.json");
+        _historyCleanupService = new LocalHistoryCleanupService(localRepository, HistoryRetentionSettingsPath);
         StartupPerformanceLog.Write("app.database-ready", startupTimer.Elapsed);
         startupTimer.Restart();
         SyncClient = new ClipBridgeSyncClient(
@@ -59,6 +64,7 @@ public partial class App : System.Windows.Application
 
     protected override void OnExit(ExitEventArgs e)
     {
+        _historyCleanupService?.Dispose();
         _trayIconService?.Dispose();
         SyncClient.DisposeAsync().AsTask().GetAwaiter().GetResult();
         base.OnExit(e);
@@ -81,6 +87,27 @@ public partial class App : System.Windows.Application
             if (ReferenceEquals(_syncConnectionWindow, window))
             {
                 _syncConnectionWindow = null;
+            }
+        };
+        window.Show();
+        window.Activate();
+    }
+
+    public void ShowHistoryRetentionWindow()
+    {
+        if (_historyRetentionWindow is { IsVisible: true })
+        {
+            _historyRetentionWindow.Activate();
+            return;
+        }
+
+        var window = new HistoryRetentionWindow(HistoryRetentionSettingsPath);
+        _historyRetentionWindow = window;
+        window.Closed += (_, _) =>
+        {
+            if (ReferenceEquals(_historyRetentionWindow, window))
+            {
+                _historyRetentionWindow = null;
             }
         };
         window.Show();

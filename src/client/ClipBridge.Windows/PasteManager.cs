@@ -133,7 +133,7 @@ public sealed class PasteManager
         if (_expectedFocusWindowHandle == nint.Zero || !_isWindow(_expectedFocusWindowHandle))
         {
             _expectedFocusWindowHandle = nint.Zero;
-            return true;
+            return _getFocusedWindowHandle(targetWindowHandle) != nint.Zero;
         }
 
         return _getFocusedWindowHandle(targetWindowHandle) == _expectedFocusWindowHandle;

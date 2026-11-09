@@ -125,6 +125,32 @@ public sealed class ClipBridgeSyncClientTests
     }
 
     [Fact]
+    public async Task ChangingServerAddressPreservesPairedDeviceSession()
+    {
+        using var temporary = new TemporaryDirectory();
+        await using var server = new LocalSyncTestServer();
+        var repository = new SqliteClipboardRepository(Path.Combine(temporary.Path, "clipbridge.db"));
+        var settingsPath = Path.Combine(temporary.Path, "sync-profiles.json");
+        var newAddress = new UriBuilder(server.BaseUri) { Host = "localhost" }.Uri;
+
+        await using (var client = new ClipBridgeSyncClient(repository, settingsPath))
+        {
+            await client.ActivateDeviceAsync(server.BaseUri);
+            await client.RequestPairingAsync(server.BaseUri, "PEER12");
+            await client.ActivateDeviceAsync(newAddress);
+            Assert.Equal("PEER12", client.PeerDeviceCode);
+        }
+
+        var session = JsonNode.Parse(await File.ReadAllTextAsync(settingsPath + ".device-session.json"));
+        Assert.Equal(newAddress.ToString(), session?["ServerAddress"]?.GetValue<string>());
+        await using var restartedClient = new ClipBridgeSyncClient(repository, settingsPath);
+        await restartedClient.RestoreDeviceSessionAsync();
+        Assert.True(restartedClient.IsConnected);
+        Assert.Equal("PEER12", restartedClient.PeerDeviceCode);
+        Assert.Equal(1, server.AnonymousDeviceRegistrationCount);
+    }
+
+    [Fact]
     public async Task RestoresSavedDeviceSessionAfterRestartWithoutPairingAgain()
     {
         using var temporary = new TemporaryDirectory();

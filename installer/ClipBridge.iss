@@ -1,5 +1,5 @@
 #define AppName "ClipBridge"
-#define AppVersion "1.0.0"
+#define AppVersion "1.0.2"
 #define AppPublisher "ClipBridge"
 #define AppExeName "ClipBridge.exe"
 #define PublishDir "..\artifacts\ClipBridge"
@@ -21,7 +21,7 @@ OutputDir=..\artifacts\ClipBridge-Installers
 OutputBaseFilename=ClipBridge-Setup
 SetupIconFile=..\src\client\ClipBridge.App\Assets\Icons\clipbridge.ico
 UninstallDisplayIcon={app}\{#AppExeName}
-CloseApplications=yes
+CloseApplications=no
 DisableProgramGroupPage=yes
 WizardStyle=modern
 Compression=lzma2
@@ -48,6 +48,55 @@ Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: 
 [Code]
 var
   RemovePersonalData: Boolean;
+
+function NextButtonClick(CurPageID: Integer): Boolean;
+var
+  Locator, Service, Processes: Variant;
+  ResultCode: Integer;
+begin
+  Result := True;
+  if CurPageID <> wpReady then
+    Exit;
+
+  try
+    Locator := CreateOleObject('WbemScripting.SWbemLocator');
+    Service := Locator.ConnectServer('.', 'root\cimv2');
+    while True do
+    begin
+      Processes := Service.ExecQuery('SELECT ProcessId FROM Win32_Process WHERE Name = ''ClipBridge.exe''');
+      if Processes.Count = 0 then
+        Exit;
+
+      if WizardSilent then
+      begin
+        Log('ClipBridge is still running; installation cannot continue.');
+        Result := False;
+        Exit;
+      end;
+
+      if MsgBox('ClipBridge 仍在后台运行。点击“确定”关闭 ClipBridge 并继续安装，或点击“取消”返回。',
+        mbConfirmation, MB_OKCANCEL) <> IDOK then
+      begin
+        Result := False;
+        Exit;
+      end;
+
+      if not Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /IM "ClipBridge.exe"',
+        '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then
+      begin
+        MsgBox('无法关闭 ClipBridge，请手动从系统托盘退出后重试。', mbError, MB_OK);
+        Result := False;
+        Exit;
+      end;
+      Log(Format('Close ClipBridge command returned %d; checking process again.', [ResultCode]));
+    end;
+  except
+    Log('Failed to check ClipBridge process: ' + GetExceptionMessage);
+    if not WizardSilent then
+      MsgBox('无法检查 ClipBridge 进程，请重试。', mbError, MB_OK);
+    Result := False;
+  end;
+end;
 
 function GetPreviousInstallDir(Param: String): String;
 begin

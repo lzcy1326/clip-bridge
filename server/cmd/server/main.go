@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -18,13 +19,19 @@ import (
 )
 
 func main() {
-	databaseURL := os.Getenv("CLIPBRIDGE_DATABASE_URL")
-	if databaseURL == "" {
-		log.Fatal("CLIPBRIDGE_DATABASE_URL is required")
+	databaseURL, err := environmentValue("CLIPBRIDGE_DATABASE_URL")
+	if err != nil {
+		log.Fatalf("read database URL: %v", err)
 	}
-	jwtSecret := os.Getenv("CLIPBRIDGE_JWT_SECRET")
+	if databaseURL == "" {
+		log.Fatal("CLIPBRIDGE_DATABASE_URL or CLIPBRIDGE_DATABASE_URL_FILE is required")
+	}
+	jwtSecret, err := environmentValue("CLIPBRIDGE_JWT_SECRET")
+	if err != nil {
+		log.Fatalf("read JWT secret: %v", err)
+	}
 	if len(jwtSecret) < 32 {
-		log.Fatal("CLIPBRIDGE_JWT_SECRET must contain at least 32 bytes")
+		log.Fatal("CLIPBRIDGE_JWT_SECRET or CLIPBRIDGE_JWT_SECRET_FILE must contain at least 32 bytes")
 	}
 	startupContext, startupCancel := context.WithTimeout(context.Background(), 15*time.Second)
 	store, err := accounts.Open(startupContext, databaseURL)
@@ -80,10 +87,21 @@ func main() {
 		startupCancel()
 		log.Fatalf("ensure clipboard schema: %v", err)
 	}
+	retentionConfig, err := clipboard.RetentionConfigFromEnvironment()
+	if err != nil {
+		clipboardStore.Close()
+		deviceStore.Close()
+		store.Close()
+		startupCancel()
+		log.Fatalf("configure clipboard history cleanup: %v", err)
+	}
 	startupCancel()
 	defer store.Close()
 	defer deviceStore.Close()
 	defer clipboardStore.Close()
+	cleanupContext, stopCleanup := context.WithCancel(context.Background())
+	defer stopCleanup()
+	go clipboardStore.RunRetentionCleanup(cleanupContext, retentionConfig)
 
 	address := os.Getenv("CLIPBRIDGE_SERVER_ADDR")
 	if address == "" {
@@ -110,10 +128,26 @@ func main() {
 	case err := <-serverErrors:
 		log.Fatalf("server failed: %v", err)
 	case <-shutdown:
+		stopCleanup()
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		if err := server.Shutdown(ctx); err != nil {
 			log.Printf("server shutdown failed: %v", err)
 		}
 	}
+}
+
+func environmentValue(name string) (string, error) {
+	if value := os.Getenv(name); value != "" {
+		return value, nil
+	}
+	path := os.Getenv(name + "_FILE")
+	if path == "" {
+		return "", nil
+	}
+	value, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(value)), nil
 }

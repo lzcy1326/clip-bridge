@@ -6,7 +6,34 @@ ClipBridge 用于解决：
 
 > 本地主机和云桌面无法直接复制粘贴，但两端都可以访问同一台 Linux Server。
 
-每位用户拥有独立账号，同账号的多台 Windows 设备可以同步文本和图片剪贴板历史。
+通过设备识别码和对端确认配对的 Windows 设备可以同步文本和图片剪贴板。正常使用不需要创建或输入用户账号；数据访问边界是设备配对组。
+
+## 下载与安装
+
+请从 [GitHub Releases](https://github.com/lzcy1326/clip-bridge/releases/latest) 下载正式交付物：
+
+- **Windows：** `ClipBridge-Setup.exe`。运行安装程序，可选择安装目录和是否开机自动启动。
+- **Linux Server：** `ClipBridge-Server-Deploy.zip`。解压后导入离线镜像，并运行 Compose 启动服务：
+
+  ```bash
+  docker load -i images.tar
+  docker compose up -d
+  ```
+
+Linux 部署包不包含共享密码。首次启动时，Compose 会为数据库和旧版登录兼容接口生成随机密钥，保存在 Docker 持久化卷中；删除该卷会同时删除密钥。局域网连接默认端口为 `10002`。完整步骤见[Linux 部署指南](docs/server-deployment-linux.md)。
+
+ClipBridge 的发布渠道仅提供 Windows 安装包和 Linux 部署包，不单独发布 Windows 客户端文件。
+
+## 主要功能
+
+- 文本和截图图片的本地剪贴板历史、搜索及快速粘贴。
+- 设备码配对后跨设备同步文本与不超过 2 MiB 的图片。
+- SSE 主动通知，配合 HTTP 游标拉取和 4 秒轮询兜底。
+- 本机历史默认保留 7 天、最多 300 条；服务器默认保留 15 天、每个配对组最多 500 条。历史保留规则可配置。
+
+## 开源许可证
+
+本项目采用 [MIT License](LICENSE)。
 
 ---
 
@@ -14,8 +41,8 @@ ClipBridge 用于解决：
 
 在修改任何代码之前，按顺序阅读：
 
-1. [`01-architecture.md`](./01-architecture.md)
-2. [`02-loop-engineering.md`](./02-loop-engineering.md)
+1. [`01-architecture.md`](./docs/01-architecture.md)
+2. [`02-loop-engineering.md`](./docs/02-loop-engineering.md)
 3. 本 README
 4. 当前代码
 5. 当前测试
@@ -122,12 +149,13 @@ SQLite
 Go
 Gin
 PostgreSQL
-WebSocket
-JWT
-Argon2id
+HTTP REST + SSE
+Per-device credentials
 Filesystem
 Docker Compose
 ```
+
+JWT、Argon2id 与默认管理员初始化仅属于旧账号兼容路径，不是设备配对同步的必要组件。
 
 不得自行替换。
 
@@ -154,17 +182,19 @@ Clipboard History
 Search
 Ctrl + `
 Quick Paste
-Account
 Device
 Cross-device Sync
-Admin
 ```
+
+设备码仅用于发现和发起配对；Server 使用设备凭证认证，并按配对组隔离数据。旧版账号登录与管理员初始化代码暂时保留作兼容，不属于当前用户流程或后续 MVP 目标。
 
 ---
 
 # 6. 开发进度
 
 Codex 每完成一个 MVP 后，在这里更新状态。
+
+MVP-11/12 的账号创建与登录记录是历史实现及兼容接口，不是当前产品身份流程；新设备走 MVP-24 设备识别码配对。MVP-20 按配对组而非用户账号验证数据隔离。
 
 建议格式：
 
@@ -205,15 +235,18 @@ Codex 每完成一个 MVP 后，在这里更新状态。
 [x] MVP-16 HTTP 短间隔同步与自动进入系统剪贴板
     L0: PASS（WPF Release 构建通过，0 警告、0 错误；Windows x64 自包含发布与简体中文 Inno Setup 安装包编译通过；本轮客户端回归测试未运行）
     L1/L2: PASS（用户已验证远端文字和截图自动进入本机系统剪贴板，并可直接粘贴；安装向导默认勾选开机启动）。当前安装包 SHA256 `43777E84F1B2916FA3E36C5F059F6E6CEB68848D2ADEA3141B45988F18569836`
-[ ] MVP-17 断线补偿
+[ ] MVP-17 配对设备断线补拉、文本待发送队列与重试
+    保留原因：接收端须按持久化游标补齐离线期间的文本和图片；发送端目前文本上传失败后没有持久化待发送队列，必须补上重试/重连发送。设备凭证无效时提示重新登记/配对，不做用户登录或 refresh-token 恢复。
 [x] MVP-18 图片上传
     L0: PASS（Go 全量测试通过；Compose 配置及 Server 镜像构建通过）
     L1: PASS（隔离 PostgreSQL/Server：设备凭证上传 PNG 201；重复上传 200；内容冲突 409；未授权 401；2 MiB 边界 201/413；Server 重启后图片与元数据保留）
 [x] MVP-19 图片跨设备同步
     L0: PASS（客户端 57 项测试；Go 全量测试及构建通过；自包含客户端发布通过）
     L1/L2: PASS（用户确认 Host 与无剪贴板共享的 VM 可双向同步截图，历史缩略图正常显示）
-[ ] MVP-20 用户隔离
-[ ] MVP-21 账号禁用与重置
+[ ] MVP-20 配对组数据隔离
+    保留原因：即使没有用户账号体系，不同配对组之间仍必须不可读取、删除或覆盖彼此的数据；pair_group 是当前安全边界。数据库/API 自动隔离测试及跨组实测尚未完成。
+[—] MVP-21 账号禁用与重置（移出当前路线）
+    原因：新用户流程没有账号；设备撤销、解绑、重新配对属于设备生命周期，不再用账号禁用/密码重置建模。
 [ ] MVP-22 开机启动与安装
     本轮范围：可选安装目录、当前用户安装与卸载；安装时默认勾选“开机时自动启动”（用户可取消）；托盘菜单可随时开关；安装向导为简体中文；用户历史与配对资料保存在安装目录之外。
     L0: PASS（客户端 57 项测试通过；Windows x64 自包含发布与 Inno Setup 编译通过）
@@ -227,6 +260,11 @@ Codex 每完成一个 MVP 后，在这里更新状态。
     L0: PASS（客户端 59 项测试；Go 全量测试；WPF Release 构建；Server Docker 镜像构建通过）
     L1: PASS（SSE 触发即时拉取；禁用 SSE 时 4 秒轮询仍能收到内容；SSE 不含剪贴板正文；更新后的 Server 健康检查正常）
     L2: 待 Host/VM 实测通知延迟、断线恢复及文字/图片双向同步。
+[ ] MVP-26 本机与 Server 历史清理
+    本机托盘设置按天数、条数和容量清理，默认保留 7 天、最多 300 条；Server 按环境变量配置，默认保留 15 天、每个配对组最多 500 条。自动保留待发送本机记录，并移除不再引用的图片对象。
+    L0 基础清理版本：PASS（客户端 62 项测试；Go 全量测试与构建；PostgreSQL 清理集成验证；WPF Release 与 Linux AMD64 Server 镜像构建通过）
+    当前增量（默认 7 天/300 条、Server 15 天/500 条、默认端口 10002）：待自动化回归。
+    L1/L2: 待用户验收本机清理设置、待发送记录保护、服务端历史删除及配对组容量隔离。
 ```
 
 MVP-01 验证记录：
@@ -305,7 +343,7 @@ MVP-10 验证记录：
 L0 Unit Test: PASS（Go 1.27，`go test ./...`）
 L0 Build: PASS（`go build ./...`；Linux 容器镜像构建成功）
 L1: PASS（Docker Compose 中 PostgreSQL 和 Gin 服务均为 healthy；`http://localhost:18080/health` 返回 HTTP 200 和 `{"status":"ok"}`）
-端口说明：默认主机端口为 8080；本机已有 WSL MetaTube 服务占用 8080，本轮使用 `CLIPBRIDGE_SERVER_PORT=18080` 验收。服务容器仍监听 8080。
+端口说明：以上为历史验收记录；当前 Linux 部署默认主机端口为 10002，服务容器仍监听 8080。
 启动命令：`docker compose up --build -d`
 ```
 
@@ -633,9 +671,9 @@ ClipBridge 涉及多个容易产生边界问题的能力：
 - Global Hotkey。
 - Foreground Window。
 - 自动粘贴。
-- WebSocket。
+- HTTP 与 SSE 通知。
 - 断线恢复。
-- 多用户权限。
+- 配对设备凭证与配对组隔离。
 - 图片缓存。
 
 如果一次开发大量功能，很容易出现：
@@ -693,11 +731,11 @@ Commit
 ```text
 本地文本复制粘贴闭环
 本地图片复制粘贴闭环
-账号登录闭环
+设备识别码配对闭环
 设备管理闭环
 文本跨设备闭环
 断线恢复闭环
 图片跨设备闭环
-多用户隔离闭环
+配对组数据隔离闭环
 安装运行闭环
 ```

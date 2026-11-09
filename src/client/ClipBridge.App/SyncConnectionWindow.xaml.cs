@@ -10,6 +10,7 @@ public partial class SyncConnectionWindow : Window
     private bool _hasSavedConnection;
     private string _initialDeviceCode = string.Empty;
     private string? _savedPeerDeviceCode;
+    private string? _savedServerAddress;
 
     public SyncConnectionWindow()
     {
@@ -30,6 +31,7 @@ public partial class SyncConnectionWindow : Window
         }
 
         _hasSavedConnection = true;
+        _savedServerAddress = serverAddress.Trim();
         _savedPeerDeviceCode = ClipBridge.Sync.DeviceCodeStore.IsValid(peerDeviceCode)
             ? peerDeviceCode!.Trim().ToUpperInvariant()
             : null;
@@ -47,7 +49,9 @@ public partial class SyncConnectionWindow : Window
         var currentPeerCode = PeerDeviceCodeBox.Text.Trim().ToUpperInvariant();
         var peerCodeUnchanged = string.IsNullOrEmpty(currentPeerCode)
             || string.Equals(currentPeerCode, _savedPeerDeviceCode, StringComparison.Ordinal);
-        if (_setupSucceeded || (_hasSavedConnection && peerCodeUnchanged))
+        var addressUnchanged = string.Equals(ServerAddressBox.Text.Trim().TrimEnd('/'), _savedServerAddress?.TrimEnd('/'), StringComparison.OrdinalIgnoreCase);
+        var localCodeUnchanged = string.Equals(LocalDeviceCodeBox.Text.Trim(), _initialDeviceCode, StringComparison.OrdinalIgnoreCase);
+        if ((_setupSucceeded || _hasSavedConnection) && peerCodeUnchanged && addressUnchanged && localCodeUnchanged)
         {
             Close();
             return;
@@ -99,6 +103,8 @@ public partial class SyncConnectionWindow : Window
             }
 
             _setupSucceeded = true;
+            _hasSavedConnection = true;
+            _savedServerAddress = serverUri.GetLeftPart(UriPartial.Authority);
             ConnectButton.Content = "完成";
             ConnectButton.IsDefault = false;
         }
@@ -130,12 +136,13 @@ public partial class SyncConnectionWindow : Window
 
     private void PeerDeviceCodeBox_TextChanged(object sender, System.Windows.Controls.TextChangedEventArgs e)
     {
+        _setupSucceeded = false;
         UpdateConnectButtonContent();
     }
 
     private void UpdateConnectButtonContent()
     {
-        if (_setupSucceeded)
+        if (ConnectButton is null || PeerDeviceCodeBox is null || ServerAddressBox is null || LocalDeviceCodeBox is null)
         {
             return;
         }
@@ -145,7 +152,9 @@ public partial class SyncConnectionWindow : Window
             var currentPeerCode = PeerDeviceCodeBox.Text.Trim().ToUpperInvariant();
             var peerCodeUnchanged = string.IsNullOrEmpty(currentPeerCode)
                 || string.Equals(currentPeerCode, _savedPeerDeviceCode, StringComparison.Ordinal);
-            ConnectButton.Content = peerCodeUnchanged ? "完成" : "请求配对";
+            var addressUnchanged = string.Equals(ServerAddressBox.Text.Trim().TrimEnd('/'), _savedServerAddress?.TrimEnd('/'), StringComparison.OrdinalIgnoreCase);
+            var localCodeUnchanged = string.Equals(LocalDeviceCodeBox.Text.Trim(), _initialDeviceCode, StringComparison.OrdinalIgnoreCase);
+            ConnectButton.Content = peerCodeUnchanged && addressUnchanged && localCodeUnchanged ? "完成" : "连接并保存";
         }
     }
 

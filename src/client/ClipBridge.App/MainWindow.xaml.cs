@@ -310,6 +310,13 @@ public partial class MainWindow : Window
 
     private async void Window_PreviewKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
     {
+        if (e.Key == Key.Enter && HistoryList.SelectedItem is HistoryListEntry)
+        {
+            e.Handled = true;
+            await PasteSelectedItemAsync();
+            return;
+        }
+
         if (!_isQuickPasteMode)
         {
             return;
@@ -324,10 +331,6 @@ public partial class MainWindow : Window
             case Key.Down:
                 MoveQuickPasteSelection(1);
                 e.Handled = true;
-                break;
-            case Key.Enter:
-                e.Handled = true;
-                await PasteSelectedItemAsync();
                 break;
             case Key.Escape:
                 e.Handled = true;
@@ -347,7 +350,7 @@ public partial class MainWindow : Window
 
     private async void HistoryList_MouseDoubleClick(object sender, MouseButtonEventArgs e)
     {
-        if (!_isQuickPasteMode || e.ChangedButton != MouseButton.Left
+        if (e.ChangedButton != MouseButton.Left
             || e.OriginalSource is not DependencyObject originalSource
             || ItemsControl.ContainerFromElement(HistoryList, originalSource) is not ListBoxItem listBoxItem
             || listBoxItem.DataContext is not HistoryListEntry entry)
@@ -369,7 +372,7 @@ public partial class MainWindow : Window
 
         var item = entry.Item;
 
-        var targetWindowHandle = _pasteTargetWindowHandle;
+        var targetWindowHandle = _isQuickPasteMode ? _pasteTargetWindowHandle : nint.Zero;
         Hide();
         LeaveQuickPasteMode();
         var succeeded = await PasteSelectedItemAsync(item, targetWindowHandle);
@@ -379,12 +382,6 @@ public partial class MainWindow : Window
             RefreshHistory();
             return;
         }
-
-        System.Windows.MessageBox.Show(
-            "没有完成粘贴。请确认原窗口仍然可用；内容仍保留在剪贴板中。",
-            "ClipBridge",
-            System.Windows.MessageBoxButton.OK,
-            System.Windows.MessageBoxImage.Information);
     }
 
     private async Task<bool> PasteSelectedItemAsync(
@@ -423,7 +420,8 @@ public partial class MainWindow : Window
             return false;
         }
 
-        return await _pasteManager.PasteToAsync(targetWindowHandle);
+        await _pasteManager.PasteToAsync(targetWindowHandle);
+        return true;
     }
 
     private async Task CloseQuickPasteModeAsync(bool restoreTargetFocus)

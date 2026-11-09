@@ -588,6 +588,24 @@ public sealed class ClipBridgeSyncClient : IAsyncDisposable
         var deviceCode = await _deviceCodeStore.GetOrCreateAsync(cancellationToken).ConfigureAwait(false);
         var profileKey = "device:" + deviceCode;
         var priorSession = await _deviceSessionStore.LoadAsync(cancellationToken).ConfigureAwait(false);
+        if (priorSession is not null
+            && string.Equals(priorSession.DeviceCode, deviceCode, StringComparison.Ordinal)
+            && Uri.TryCreate(priorSession.ServerAddress, UriKind.Absolute, out var savedServerUri)
+            && CreateServerBaseUri(savedServerUri) != requestedProfileServerUri)
+        {
+            using var probe = new HttpRequestMessage(HttpMethod.Get, new Uri(_serverUri, "api/v1/pairing-requests/pending"));
+            probe.Headers.Authorization = new AuthenticationHeaderValue("Bearer", priorSession.Credential);
+            using var response = await _httpClient.SendAsync(probe, cancellationToken).ConfigureAwait(false);
+            if (response.IsSuccessStatusCode)
+            {
+                priorSession = priorSession with { ServerAddress = requestedProfileServerUri.ToString() };
+                await _deviceSessionStore.SaveAsync(priorSession, cancellationToken).ConfigureAwait(false);
+            }
+            else if (response.StatusCode != HttpStatusCode.Unauthorized)
+            {
+                response.EnsureSuccessStatusCode();
+            }
+        }
         DeviceSession session;
         if (priorSession is not null
             && Uri.TryCreate(priorSession.ServerAddress, UriKind.Absolute, out var priorServerUri)

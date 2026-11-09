@@ -20,12 +20,12 @@
 
         <StackPanel Grid.Row="1" Margin="0,0,0,12">
             <TextBlock Text="Server 地址" Margin="0,0,0,4" />
-            <TextBox x:Name="ServerAddressBox" Text="http://localhost:18080" Height="38" Padding="8,5" VerticalContentAlignment="Center" />
+            <TextBox x:Name="ServerAddressBox" Text="http://localhost:10002" Height="38" Padding="8,5" VerticalContentAlignment="Center" TextChanged="PeerDeviceCodeBox_TextChanged" />
         </StackPanel>
 
         <StackPanel Grid.Row="2" Margin="0,0,0,12">
             <TextBlock Text="本机设备识别码（可修改）" Margin="0,0,0,4" />
-            <TextBox x:Name="LocalDeviceCodeBox" Height="38" Padding="8,5" MaxLength="6" CharacterCasing="Upper" VerticalContentAlignment="Center" />
+            <TextBox x:Name="LocalDeviceCodeBox" Height="38" Padding="8,5" MaxLength="6" CharacterCasing="Upper" VerticalContentAlignment="Center" TextChanged="PeerDeviceCodeBox_TextChanged" />
         </StackPanel>
 
         <StackPanel Grid.Row="3" Margin="0,0,0,12">
