@@ -26,6 +26,7 @@
     <ProjectReference Include="..\ClipBridge.Storage\ClipBridge.Storage.csproj" />
     <ProjectReference Include="..\ClipBridge.Sync\ClipBridge.Sync.csproj" />
     <ProjectReference Include="..\ClipBridge.Windows\ClipBridge.Windows.csproj" />
+    <ProjectReference Include="..\ClipBridge.App\ClipBridge.App.csproj" />
   </ItemGroup>
 
 </Project>

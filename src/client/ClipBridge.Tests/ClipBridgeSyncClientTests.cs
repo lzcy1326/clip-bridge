@@ -16,6 +16,174 @@ namespace ClipBridge.Tests;
 public sealed class ClipBridgeSyncClientTests
 {
     [Fact]
+    public async Task ManualModeDoesNotUploadOrdinaryCopiesButCanPublishExplicitly()
+    {
+        using var temporary = new TemporaryDirectory();
+        await using var server = new LocalSyncTestServer();
+        server.DisableNotifications();
+        var repository = new SqliteClipboardRepository(Path.Combine(temporary.Path, "clipboard.db"));
+        await using var client = new ClipBridgeSyncClient(repository, Path.Combine(temporary.Path, "profiles.json"));
+        client.SetAutomaticUploadEnabled(false);
+        await client.ConnectAsync(server.BaseUri, "test-user", "test-password");
+        var local = repository.AddText("private local copy", "local")!;
+        var localImage = repository.AddImage(new byte[] { 1, 2, 3 }, "local");
+        await Task.Delay(TimeSpan.FromSeconds(5));
+        Assert.False(repository.FindById(local.Id)!.Synced);
+        Assert.False(repository.FindById(localImage.Id)!.Synced);
+        Assert.Null(server.UploadedText);
+        Assert.Equal(0, server.ImageUploadAttempts);
+
+        server.AddRemoteText("manual-mode-remote", 89, "VM-TEST", "still receiving", "manual-mode-hash");
+        await WaitUntilAsync(() => repository.FindById("manual-mode-remote") is not null, TimeSpan.FromSeconds(10));
+        await client.PublishTextAsync(local);
+        Assert.True(repository.FindById(local.Id)!.Synced);
+        Assert.Equal("private local copy", server.UploadedText);
+        await client.PublishImageAsync(localImage);
+        Assert.True(repository.FindById(localImage.Id)!.Synced);
+        Assert.Equal(1, server.ImageUploadAttempts);
+
+        var notRequested = repository.AddText("do not send when switching modes", "local")!;
+        await Task.Delay(30);
+        client.SetAutomaticUploadEnabled(true);
+        var automatic = repository.AddText("new automatic copy", "local")!;
+        await WaitUntilAsync(() => repository.FindById(automatic.Id)?.Synced == true, TimeSpan.FromSeconds(10));
+        Assert.False(repository.FindById(notRequested.Id)!.Synced);
+    }
+
+    [Fact]
+    public async Task OwnServerEchoIsIgnoredAndRemoteCopyIsDelivered()
+    {
+        using var temporary = new TemporaryDirectory();
+        await using var server = new LocalSyncTestServer();
+        server.DisableNotifications();
+        var repository = new SqliteClipboardRepository(Path.Combine(temporary.Path, "clipboard.db"));
+        await using var client = new ClipBridgeSyncClient(repository, Path.Combine(temporary.Path, "profiles.json"));
+        var received = new ConcurrentQueue<ClipboardItem>();
+        client.RemoteClipboardReceived += received.Enqueue;
+        await client.ActivateDeviceAsync(server.BaseUri);
+        var local = repository.AddText("locally copied", "HOST-PC")!;
+        Assert.True(repository.MarkSynced(local.Id));
+        server.AddRemoteText(local.Id, 77, "HOST-PC", local.TextContent!, local.ContentHash);
+        await WaitUntilAsync(() => server.HistoryRequests.Count >= 2, TimeSpan.FromSeconds(10));
+        server.AddRemoteText("another-device-copy", 89, "VM-PC", "new remote value", "remote-hash");
+        await WaitUntilAsync(() => !received.IsEmpty, TimeSpan.FromSeconds(10));
+        Assert.False(repository.FindById(local.Id)!.Remote);
+        Assert.Equal("new remote value", Assert.Single(received).TextContent);
+    }
+
+    [Fact]
+    public async Task ReconnectionSkipsOfflineCopiesAndContinuesWithNewCopies()
+    {
+        using var temporary = new TemporaryDirectory();
+        await using var server = new LocalSyncTestServer();
+        server.DisableNotifications();
+        var repository = new SqliteClipboardRepository(Path.Combine(temporary.Path, "clipboard.db"));
+        await using var client = new ClipBridgeSyncClient(repository, Path.Combine(temporary.Path, "profiles.json"));
+        var unavailable = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        client.StatusChanged += status => { if (status.Contains("HTTP 503")) unavailable.TrySetResult(); };
+        await client.ConnectAsync(server.BaseUri, "test-user", "test-password");
+        server.FailNextHistoryRequest();
+        await unavailable.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        var offline = repository.AddText("copied while offline", "local")!;
+        await WaitUntilAsync(() => server.HealthRequests >= 2 && server.HistoryRequests.Count >= 2, TimeSpan.FromSeconds(10));
+        var live = repository.AddText("copied after recovery", "local")!;
+        await WaitUntilAsync(() => repository.FindById(live.Id)?.Synced == true, TimeSpan.FromSeconds(10));
+        Assert.False(repository.FindById(offline.Id)!.Synced);
+        Assert.Equal("copied after recovery", server.UploadedText);
+    }
+
+    [Fact]
+    public async Task ConnectionStartsTextAndImageCursorsAtCurrentTime()
+    {
+        using var temporary = new TemporaryDirectory();
+        await using var server = new LocalSyncTestServer();
+        server.DisableNotifications();
+        var repository = new SqliteClipboardRepository(Path.Combine(temporary.Path, "clipboard.db"));
+        await using var client = new ClipBridgeSyncClient(repository, Path.Combine(temporary.Path, "profiles.json"));
+        var before = DateTimeOffset.UtcNow.AddSeconds(-1);
+        await client.ActivateDeviceAsync(server.BaseUri);
+        await WaitUntilAsync(() => !server.ImageRequests.IsEmpty && !server.HistoryRequests.IsEmpty, TimeSpan.FromSeconds(5));
+        foreach (var request in new[] { server.HistoryRequests.First(), server.ImageRequests.First() })
+        {
+            var token = Uri.UnescapeDataString(request.Split("after=", 2)[1].Split('&')[0]);
+            var encoded = token.Replace('-', '+').Replace('_', '/');
+            encoded = encoded.PadRight((encoded.Length + 3) / 4 * 4, '=');
+            using var cursor = JsonDocument.Parse(Convert.FromBase64String(encoded));
+            var timestamp = cursor.RootElement.GetProperty("created_at").GetDateTimeOffset();
+            Assert.InRange(timestamp, before, DateTimeOffset.UtcNow.AddSeconds(1));
+        }
+    }
+
+    [Fact]
+    public async Task RejectedDeviceTextUploadDoesNotBlockRemoteHistoryPolling()
+    {
+        using var temporary = new TemporaryDirectory();
+        await using var server = new LocalSyncTestServer();
+        server.DisableNotifications();
+        var repository = new SqliteClipboardRepository(Path.Combine(temporary.Path, "clipboard.db"));
+        await using var client = new ClipBridgeSyncClient(repository, Path.Combine(temporary.Path, "profiles.json"));
+        var rejected = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        client.StatusChanged += status => { if (status.Contains("HTTP 404")) rejected.TrySetResult(); };
+        await client.ActivateDeviceAsync(server.BaseUri);
+        var local = repository.AddText("keep pending after rejection", "local")!;
+        await rejected.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        server.AddRemoteText("remote-after-rejection", 89, "VM-TEST", "still receiving", "remote-after-rejection-hash");
+        await WaitUntilAsync(() => repository.FindById("remote-after-rejection") is not null, TimeSpan.FromSeconds(10));
+        Assert.False(repository.FindById(local.Id)!.Synced);
+    }
+
+    [Fact]
+    public async Task UnresponsiveServerDoesNotDelayLocalCaptureHistoryOrClipboardWrite()
+    {
+        using var temporary = new TemporaryDirectory();
+        await using var server = new LocalSyncTestServer();
+        server.DisableNotifications();
+        server.DelayNextHistoryResponse(TimeSpan.FromSeconds(30));
+        var repository = new SqliteClipboardRepository(Path.Combine(temporary.Path, "clipboard.db"));
+        await using var client = new ClipBridgeSyncClient(repository, Path.Combine(temporary.Path, "profiles.json"));
+        using var stop = new CancellationTokenSource();
+        var connection = Task.Run(() => client.ConnectAsync(server.BaseUri, "test-user", "test-password", stop.Token));
+        try
+        {
+            await WaitUntilAsync(() => server.HistoryRequests.Count > 0, TimeSpan.FromSeconds(5));
+            Assert.False(connection.IsCompleted);
+            await using var history = new ClipBridge.Core.Services.LocalClipboardHistory(repository);
+            var timer = Stopwatch.StartNew();
+            history.CaptureText("available offline", "local");
+            history.CaptureFiles([@"C:\offline.txt"], "local");
+            Assert.Contains(history.Snapshot(), entry => entry.Item.TextContent == "available offline");
+            string? copied = null;
+            using var writer = new ClipBridge.Windows.ClipboardWriter(setText: text => copied = text);
+            await writer.SetTextAsync("available offline").WaitAsync(TimeSpan.FromSeconds(2));
+            Assert.Equal("available offline", copied);
+            Assert.True(timer.Elapsed < TimeSpan.FromSeconds(2));
+            Assert.False(connection.IsCompleted);
+        }
+        finally
+        {
+            stop.Cancel();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => connection);
+        }
+    }
+
+    [Fact]
+    public async Task PollingUploadsLocallyPersistedTextWithoutTheUiWaitingForTheServer()
+    {
+        using var temporary = new TemporaryDirectory();
+        await using var server = new LocalSyncTestServer();
+        server.DisableNotifications();
+        var repository = new SqliteClipboardRepository(Path.Combine(temporary.Path, "clipboard.db"));
+        var text = repository.AddText("saved while offline", "local")!;
+        repository.AddFiles([@"C:\private-local-file.txt"], "local");
+        await using var client = new ClipBridgeSyncClient(repository, Path.Combine(temporary.Path, "profiles.json"));
+        await client.ConnectAsync(server.BaseUri, "test-user", "test-password");
+        var current = repository.AddText("copied after connection", "local")!;
+        await WaitUntilAsync(() => repository.FindById(current.Id)?.Synced == true, TimeSpan.FromSeconds(10));
+        Assert.Equal("copied after connection", server.UploadedText);
+        Assert.False(repository.FindById(text.Id)!.Synced);
+    }
+
+    [Fact]
     public async Task ReauthenticatesAfterUnauthorizedHistoryAndPublishRequests()
     {
         using var temporary = new TemporaryDirectory();
@@ -28,7 +196,7 @@ public sealed class ClipBridgeSyncClientTests
 
         Assert.Equal(server.BaseUri.GetLeftPart(UriPartial.Authority), client.ConnectedServerAddress);
         Assert.Equal(1, server.LoginCount);
-        Assert.Equal("from-host", Assert.Single(repository.GetRecentTextItems(10)).TextContent);
+        Assert.Empty(repository.GetRecentTextItems(10));
 
         server.ExpireNextAuthorizedRequest();
         var local = repository.AddText("from-client", "LOCAL-PC")!;
@@ -378,11 +546,7 @@ public sealed class ClipBridgeSyncClientTests
                 throw new InvalidOperationException("The local sync test server failed to handle a request.", failure);
             }
 
-            var pulled = Assert.Single(repository.GetRecentTextItems(10));
-            Assert.Equal("from-host", pulled.TextContent);
-            Assert.Equal("HOST-PC", pulled.OriginDeviceId);
-            Assert.True(pulled.Remote);
-            Assert.True(pulled.Synced);
+            Assert.Empty(repository.GetRecentTextItems(10));
 
             var local = repository.AddText("from-cloud", "CLOUD-DEV")!;
             await client.PublishTextAsync(local);
@@ -397,7 +561,7 @@ public sealed class ClipBridgeSyncClientTests
         }
 
         Assert.Equal(1, server.DeviceRegistrationCount);
-        Assert.Contains(server.HistoryRequests, request => request.Contains("after=opaque-cursor%2B", StringComparison.Ordinal));
+        Assert.All(server.HistoryRequests, request => Assert.Contains("after=", request, StringComparison.Ordinal));
         var savedProfiles = await File.ReadAllTextAsync(profilePath);
         Assert.DoesNotContain("never-save-this-password", savedProfiles, StringComparison.Ordinal);
         Assert.DoesNotContain("test-access-token", savedProfiles, StringComparison.Ordinal);
@@ -441,6 +605,9 @@ public sealed class ClipBridgeSyncClientTests
         private int _failNextPairingDecision;
         private int _nextHistoryResponseDelayMs;
         private int _disableNotifications;
+        private int _failNextHistoryRequest;
+        private int _healthRequests;
+        private int _imageUploadAttempts;
         private string _activeAccessToken = string.Empty;
         private string? _uploadedId;
         private string? _uploadedText;
@@ -462,12 +629,15 @@ public sealed class ClipBridgeSyncClientTests
         public int AnonymousDeviceRegistrationCount => Volatile.Read(ref _anonymousDeviceRegistrationCount);
         public int PairingRequestCount => Volatile.Read(ref _pairingRequestCount);
         public int LoginCount => Volatile.Read(ref _loginCount);
+        public int HealthRequests => Volatile.Read(ref _healthRequests);
+        public int ImageUploadAttempts => Volatile.Read(ref _imageUploadAttempts);
         public string? UploadedId => Volatile.Read(ref _uploadedId);
         public string? UploadedText => Volatile.Read(ref _uploadedText);
         public string? RegisteredDeviceCode => Volatile.Read(ref _registeredDeviceCode);
         public string? PairingRequesterCode => Volatile.Read(ref _pairingRequesterCode);
         public string? PairingTargetCode => Volatile.Read(ref _pairingTargetCode);
         public ConcurrentQueue<string> HistoryRequests { get; } = new();
+        public ConcurrentQueue<string> ImageRequests { get; } = new();
         public ConcurrentQueue<Exception> Failures { get; } = new();
         public TaskCompletionSource<bool> NotificationConnection { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -476,6 +646,7 @@ public sealed class ClipBridgeSyncClientTests
         public void ReturnAlreadyPaired() => Interlocked.Exchange(ref _returnAlreadyPaired, 1);
         public void FailNextPairingDecision() => Interlocked.Exchange(ref _failNextPairingDecision, 1);
         public void DisableNotifications() => Interlocked.Exchange(ref _disableNotifications, 1);
+        public void FailNextHistoryRequest() => Interlocked.Exchange(ref _failNextHistoryRequest, 1);
         public void DelayNextHistoryResponse(TimeSpan delay) => Interlocked.Exchange(ref _nextHistoryResponseDelayMs, checked((int)delay.TotalMilliseconds));
         public void AddRemoteText(string id, long originDeviceId, string originDeviceName, string text, string contentHash)
         {
@@ -585,7 +756,20 @@ public sealed class ClipBridgeSyncClientTests
                 var statusCode = 200;
                 string responseBody;
 
-                if (path == "/api/v1/auth/login" && method == "POST")
+                if (path == "/api/v1/images" && method == "POST")
+                    Interlocked.Increment(ref _imageUploadAttempts);
+
+                if (path == "/health" && method == "GET")
+                {
+                    Interlocked.Increment(ref _healthRequests);
+                    responseBody = """{"status":"ok"}""";
+                }
+                else if (path == "/api/v1/clips" && method == "GET" && Interlocked.Exchange(ref _failNextHistoryRequest, 0) == 1)
+                {
+                    statusCode = 503;
+                    responseBody = """{"error":"service_unavailable"}""";
+                }
+                else if (path == "/api/v1/auth/login" && method == "POST")
                 {
                     var loginNumber = Interlocked.Increment(ref _loginCount);
                     var accessToken = $"test-access-token-{loginNumber}";
@@ -660,6 +844,7 @@ public sealed class ClipBridgeSyncClientTests
                     }
                     else if (path == "/api/v1/images" && method == "GET")
                     {
+                        ImageRequests.Enqueue(target);
                         responseBody = """{"items":[],"has_more":false}""";
                     }
                     else
@@ -690,6 +875,11 @@ public sealed class ClipBridgeSyncClientTests
                         statusCode = 201;
                         responseBody = "{}";
                     }
+                    else if (path == "/api/v1/images" && method == "POST")
+                    {
+                        statusCode = 201;
+                        responseBody = "{}";
+                    }
                     else if (path == "/api/v1/clips" && method == "GET")
                     {
                         HistoryRequests.Enqueue(target);
@@ -713,6 +903,7 @@ public sealed class ClipBridgeSyncClientTests
                     }
                     else if (path == "/api/v1/images" && method == "GET")
                     {
+                        ImageRequests.Enqueue(target);
                         responseBody = """{"items":[],"has_more":false}""";
                     }
                     else

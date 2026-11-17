@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Diagnostics;
 using System.Text;
+using System.Text.Json;
 using ClipBridge.Core.Diagnostics;
 using ClipBridge.Core.Interfaces;
 using ClipBridge.Core.Models;
@@ -33,7 +34,7 @@ public sealed class SqliteClipboardRepository : IClipboardRepository
         InitializeDatabase();
     }
 
-    public ClipboardItem? AddText(string text, string originDeviceId)
+    public ClipboardItem? AddText(string text, string originDeviceId, bool allowAutomaticUpload = true)
     {
         ArgumentNullException.ThrowIfNull(text);
         ArgumentException.ThrowIfNullOrWhiteSpace(originDeviceId);
@@ -92,6 +93,7 @@ public sealed class SqliteClipboardRepository : IClipboardRepository
                         text_content = $text_content,
                         created_at = $created_at,
                         synced = 0,
+                        auto_upload = $auto_upload,
                         remote = 0
                     WHERE id = $id;
                     """;
@@ -100,6 +102,7 @@ public sealed class SqliteClipboardRepository : IClipboardRepository
                 updateCommand.Parameters.AddWithValue("$origin_device_id", updatedItem.OriginDeviceId);
                 updateCommand.Parameters.AddWithValue("$text_content", updatedItem.TextContent!);
                 updateCommand.Parameters.AddWithValue("$created_at", updatedItem.CreatedAtUnixMilliseconds);
+                updateCommand.Parameters.AddWithValue("$auto_upload", allowAutomaticUpload ? 1 : 0);
                 updateCommand.ExecuteNonQuery();
                 transaction.Commit();
 
@@ -112,9 +115,9 @@ public sealed class SqliteClipboardRepository : IClipboardRepository
             insertCommand.Transaction = transaction;
             insertCommand.CommandText = """
                 INSERT INTO clipboard_items
-                    (id, origin_device_id, type, text_content, image_path, content_hash, created_at, synced, remote)
+                    (id, origin_device_id, type, text_content, image_path, content_hash, created_at, synced, remote, auto_upload)
                 VALUES
-                    ($id, $origin_device_id, $type, $text_content, NULL, $content_hash, $created_at, 0, 0);
+                    ($id, $origin_device_id, $type, $text_content, NULL, $content_hash, $created_at, 0, 0, $auto_upload);
                 """;
             insertCommand.Parameters.AddWithValue("$id", item.Id);
             insertCommand.Parameters.AddWithValue("$origin_device_id", item.OriginDeviceId);
@@ -122,6 +125,7 @@ public sealed class SqliteClipboardRepository : IClipboardRepository
             insertCommand.Parameters.AddWithValue("$text_content", item.TextContent!);
             insertCommand.Parameters.AddWithValue("$content_hash", item.ContentHash);
             insertCommand.Parameters.AddWithValue("$created_at", item.CreatedAtUnixMilliseconds);
+            insertCommand.Parameters.AddWithValue("$auto_upload", allowAutomaticUpload ? 1 : 0);
             insertCommand.ExecuteNonQuery();
         }
 
@@ -271,7 +275,7 @@ public sealed class SqliteClipboardRepository : IClipboardRepository
         return command.ExecuteNonQuery() == 1;
     }
 
-    public ClipboardItem AddImage(ReadOnlyMemory<byte> pngBytes, string originDeviceId)
+    public ClipboardItem AddImage(ReadOnlyMemory<byte> pngBytes, string originDeviceId, bool allowAutomaticUpload = true)
     {
         lock (_imageMutationLock)
         {
@@ -354,6 +358,7 @@ public sealed class SqliteClipboardRepository : IClipboardRepository
                         image_path = $image_path,
                         created_at = $created_at,
                         synced = 0,
+                        auto_upload = $auto_upload,
                         remote = 0
                     WHERE id = $id;
                     """;
@@ -361,6 +366,7 @@ public sealed class SqliteClipboardRepository : IClipboardRepository
                     updateCommand.Parameters.AddWithValue("$origin_device_id", updatedItem.OriginDeviceId);
                     updateCommand.Parameters.AddWithValue("$image_path", updatedItem.ImagePath!);
                     updateCommand.Parameters.AddWithValue("$created_at", updatedItem.CreatedAtUnixMilliseconds);
+                    updateCommand.Parameters.AddWithValue("$auto_upload", allowAutomaticUpload ? 1 : 0);
                     updateCommand.ExecuteNonQuery();
                     transaction.Commit();
 
@@ -373,9 +379,9 @@ public sealed class SqliteClipboardRepository : IClipboardRepository
                 insertCommand.Transaction = transaction;
                 insertCommand.CommandText = """
                 INSERT INTO clipboard_items
-                    (id, origin_device_id, type, text_content, image_path, content_hash, created_at, synced, remote)
+                    (id, origin_device_id, type, text_content, image_path, content_hash, created_at, synced, remote, auto_upload)
                 VALUES
-                    ($id, $origin_device_id, $type, NULL, $image_path, $content_hash, $created_at, 0, 0);
+                    ($id, $origin_device_id, $type, NULL, $image_path, $content_hash, $created_at, 0, 0, $auto_upload);
                 """;
                 insertCommand.Parameters.AddWithValue("$id", item.Id);
                 insertCommand.Parameters.AddWithValue("$origin_device_id", item.OriginDeviceId);
@@ -383,6 +389,7 @@ public sealed class SqliteClipboardRepository : IClipboardRepository
                 insertCommand.Parameters.AddWithValue("$image_path", imagePath);
                 insertCommand.Parameters.AddWithValue("$content_hash", item.ContentHash);
                 insertCommand.Parameters.AddWithValue("$created_at", item.CreatedAtUnixMilliseconds);
+                insertCommand.Parameters.AddWithValue("$auto_upload", allowAutomaticUpload ? 1 : 0);
                 insertCommand.ExecuteNonQuery();
             }
 
@@ -486,12 +493,13 @@ public sealed class SqliteClipboardRepository : IClipboardRepository
         return command.ExecuteNonQuery() == 1;
     }
 
-    public IReadOnlyList<ClipboardItem> GetPendingImages(int limit)
+    public IReadOnlyList<ClipboardItem> GetPendingImages(int limit, long sinceUnixMilliseconds = 0)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(limit);
         using var connection = OpenConnection();
         using var command = connection.CreateCommand();
-        command.CommandText = "SELECT id, origin_device_id, type, text_content, image_path, content_hash, created_at, synced, remote, last_used_at FROM clipboard_items WHERE type = $type AND synced = 0 AND remote = 0 ORDER BY created_at DESC LIMIT $limit;";
+        command.CommandText = "SELECT id, origin_device_id, type, text_content, image_path, content_hash, created_at, synced, remote, last_used_at FROM clipboard_items WHERE type = $type AND synced = 0 AND remote = 0 AND auto_upload = 1 AND created_at >= $since ORDER BY created_at DESC LIMIT $limit;";
+        command.Parameters.AddWithValue("$since", sinceUnixMilliseconds);
         command.Parameters.AddWithValue("$type", ImageTypeName);
         command.Parameters.AddWithValue("$limit", limit);
         using var reader = command.ExecuteReader();
@@ -511,6 +519,57 @@ public sealed class SqliteClipboardRepository : IClipboardRepository
         command.CommandText = "SELECT COUNT(*) FROM clipboard_items WHERE type = $type;";
         command.Parameters.AddWithValue("$type", TextTypeName);
         return Convert.ToInt32(command.ExecuteScalar());
+    }
+
+    public ClipboardItem AddFiles(IReadOnlyList<string> paths, string originDeviceId)
+    {
+        ArgumentNullException.ThrowIfNull(paths);
+        if (paths.Count == 0 || paths.Any(string.IsNullOrWhiteSpace))
+            throw new ArgumentException("File paths cannot be empty.", nameof(paths));
+        var json = JsonSerializer.Serialize(paths);
+        var hash = ComputeContentHash("FILES", Encoding.UTF8.GetBytes(json));
+        using var connection = OpenConnection();
+        using var transaction = connection.BeginTransaction();
+        using var find = connection.CreateCommand();
+        find.Transaction = transaction;
+        find.CommandText = "SELECT id FROM clipboard_items WHERE type = 'FILES' AND content_hash = $hash LIMIT 1;";
+        find.Parameters.AddWithValue("$hash", hash);
+        var id = find.ExecuteScalar() as string ?? Guid.NewGuid().ToString("N");
+        var item = new ClipboardItem(id, originDeviceId, ClipboardItemType.Files, json, null, hash,
+            DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), true, false);
+        using var write = connection.CreateCommand();
+        write.Transaction = transaction;
+        write.CommandText = """
+            INSERT INTO clipboard_items (id, origin_device_id, type, text_content, image_path, content_hash, created_at, synced, remote)
+            VALUES ($id, $origin, 'FILES', $paths, NULL, $hash, $created, 1, 0)
+            ON CONFLICT(id) DO UPDATE SET created_at = MAX(clipboard_items.created_at + 1, excluded.created_at);
+            """;
+        write.Parameters.AddWithValue("$id", id);
+        write.Parameters.AddWithValue("$origin", originDeviceId);
+        write.Parameters.AddWithValue("$paths", json);
+        write.Parameters.AddWithValue("$hash", hash);
+        write.Parameters.AddWithValue("$created", item.CreatedAtUnixMilliseconds);
+        write.ExecuteNonQuery();
+        transaction.Commit();
+        return item;
+    }
+
+    public IReadOnlyList<ClipboardItem> GetPendingTexts(int limit, long sinceUnixMilliseconds = 0)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(limit);
+        using var connection = OpenConnection();
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT id, origin_device_id, type, text_content, image_path, content_hash, created_at, synced, remote, last_used_at
+            FROM clipboard_items WHERE type = 'TEXT' AND synced = 0 AND remote = 0 AND auto_upload = 1 AND created_at >= $since
+            ORDER BY created_at LIMIT $limit;
+            """;
+        command.Parameters.AddWithValue("$limit", limit);
+        command.Parameters.AddWithValue("$since", sinceUnixMilliseconds);
+        using var reader = command.ExecuteReader();
+        var items = new List<ClipboardItem>();
+        while (reader.Read()) items.Add(ReadClipboardItem(reader));
+        return items;
     }
 
     public IReadOnlyList<ClipboardItem> GetRecentItems(int limit)
@@ -682,7 +741,7 @@ public sealed class SqliteClipboardRepository : IClipboardRepository
             using (var command = connection.CreateCommand())
             {
                 command.CommandText = """
-                SELECT id, type, text_content, image_path, created_at, synced, remote
+                SELECT id, type, text_content, image_path, created_at, synced, remote, auto_upload
                 FROM clipboard_items
                 ORDER BY created_at DESC, id DESC;
                 """;
@@ -695,7 +754,7 @@ public sealed class SqliteClipboardRepository : IClipboardRepository
                         reader.IsDBNull(2) ? null : reader.GetString(2),
                         reader.IsDBNull(3) ? null : reader.GetString(3),
                         reader.GetInt64(4),
-                        reader.GetInt32(5) != 0 || reader.GetInt32(6) != 0));
+                        reader.GetInt32(5) != 0 || reader.GetInt32(6) != 0 || reader.GetInt32(7) == 0));
                 }
             }
 
@@ -740,7 +799,7 @@ public sealed class SqliteClipboardRepository : IClipboardRepository
             using (var command = connection.CreateCommand())
             {
                 command.Transaction = transaction;
-                command.CommandText = "DELETE FROM clipboard_items WHERE id = $id AND created_at = $created_at AND (synced = 1 OR remote = 1);";
+                command.CommandText = "DELETE FROM clipboard_items WHERE id = $id AND created_at = $created_at AND (synced = 1 OR remote = 1 OR auto_upload = 0);";
                 var idParameter = command.Parameters.Add("$id", SqliteType.Text);
                 var createdAtParameter = command.Parameters.Add("$created_at", SqliteType.Integer);
                 foreach (var record in deleteRecords)
@@ -777,7 +836,7 @@ public sealed class SqliteClipboardRepository : IClipboardRepository
 
     private static long GetContentBytes(CleanupRecord record, HashSet<string> countedImagePaths)
     {
-        if (string.Equals(record.Type, TextTypeName, StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(record.Type, TextTypeName, StringComparison.OrdinalIgnoreCase) || record.Type == "FILES")
         {
             return record.TextContent is null ? 0 : Encoding.UTF8.GetByteCount(record.TextContent);
         }
@@ -875,6 +934,7 @@ public sealed class SqliteClipboardRepository : IClipboardRepository
                 created_at INTEGER NOT NULL,
                 synced INTEGER NOT NULL DEFAULT 0,
                 remote INTEGER NOT NULL DEFAULT 0,
+                auto_upload INTEGER NOT NULL DEFAULT 1,
                 last_used_at INTEGER NULL
             );
             CREATE INDEX IF NOT EXISTS ix_clipboard_items_created_at
@@ -885,8 +945,22 @@ public sealed class SqliteClipboardRepository : IClipboardRepository
             """;
         command.ExecuteNonQuery();
         EnsureLastUsedColumn(connection);
+        EnsureAutomaticUploadColumn(connection);
         EnsureTextUniquenessMigration(connection);
         StartupPerformanceLog.Write("storage.database-initialize", initializationTimer.Elapsed);
+    }
+
+    private static void EnsureAutomaticUploadColumn(SqliteConnection connection)
+    {
+        using var columns = connection.CreateCommand();
+        columns.CommandText = "PRAGMA table_info(clipboard_items);";
+        using var reader = columns.ExecuteReader();
+        while (reader.Read())
+            if (string.Equals(reader.GetString(1), "auto_upload", StringComparison.OrdinalIgnoreCase)) return;
+        reader.Close();
+        using var alter = connection.CreateCommand();
+        alter.CommandText = "ALTER TABLE clipboard_items ADD COLUMN auto_upload INTEGER NOT NULL DEFAULT 1;";
+        alter.ExecuteNonQuery();
     }
 
     private static void EnsureLastUsedColumn(SqliteConnection connection)
@@ -1038,6 +1112,7 @@ public sealed class SqliteClipboardRepository : IClipboardRepository
     {
         TextTypeName => ClipboardItemType.Text,
         ImageTypeName => ClipboardItemType.Image,
+            "FILES" => ClipboardItemType.Files,
         _ => throw new InvalidDataException($"Unsupported clipboard item type '{type}'.")
     };
 }

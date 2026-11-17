@@ -10,6 +10,10 @@ using System.Windows.Media.Imaging;
 
 namespace ClipBridge.Windows;
 
+public enum ClipboardSnapshotKind { Text, Image, Files, Unsupported }
+
+public sealed record ClipboardSnapshot(ClipboardSnapshotKind Kind, uint Sequence, string? Text = null, byte[]? Image = null);
+
 public sealed class ClipboardMonitor : IDisposable
 {
     private const int WmClipboardUpdate = 0x031D;
@@ -21,17 +25,23 @@ public sealed class ClipboardMonitor : IDisposable
     private readonly Window _window;
     private HwndSource? _source;
     private nint _windowHandle;
-    private string? _suppressedText;
-    private DispatcherTimer? _clipboardRetryTimer;
+    private volatile string? _suppressedText;
+    private readonly StaTaskRunner _reader = new("ClipBridge local clipboard reader");
+    private int _readRequested;
+    private int _readerRunning;
+    private int _copyReadGeneration;
+    private uint _suppressedSequence;
+    private uint _observedSequence;
+    private uint _captureSequence;
     private bool _isRegistered;
-    private bool _isDisposed;
-    private bool _clipboardReadScheduled;
+    private volatile bool _isDisposed;
     private int _clipboardReadAttempts;
     private uint? _suppressedImageClipboardSequenceNumber;
 
     public ClipboardMonitor(Window window)
     {
         _window = window ?? throw new ArgumentNullException(nameof(window));
+        _observedSequence = GetClipboardSequenceNumber();
         _window.SourceInitialized += OnSourceInitialized;
         _window.Closing += OnWindowClosing;
 
@@ -45,9 +55,53 @@ public sealed class ClipboardMonitor : IDisposable
 
     public event Action<byte[]>? ImageCaptured;
 
+    public event Action<string[]>? FilesCaptured;
+
+    public event Action? ClipboardChanged;
+
+    public uint ObservedSequence => Volatile.Read(ref _observedSequence);
+    public uint CaptureSequence => Volatile.Read(ref _captureSequence);
+
+    public static bool HasImageFormat()
+    {
+        const uint cfFileDrop = 15;
+        const uint cfBitmap = 2;
+        var png = RegisterClipboardFormat("PNG");
+        return !IsClipboardFormatAvailable(cfFileDrop)
+            && (png != 0 && IsClipboardFormatAvailable(png)
+                || IsClipboardFormatAvailable(CfDibV5)
+                || IsClipboardFormatAvailable(CfDib)
+                || IsClipboardFormatAvailable(cfBitmap));
+    }
+
+    public void SuppressSequence(uint sequence)
+    {
+        Volatile.Write(ref _suppressedSequence, sequence);
+        Volatile.Write(ref _observedSequence, sequence);
+    }
+
     public event Action? ClipboardReadFailed;
 
     public event Action<Exception>? ListenerFailed;
+
+    public Task<ClipboardSnapshot> ReadCurrentAsync(CancellationToken cancellationToken = default) =>
+        _reader.RunAsync(() =>
+        {
+            var sequence = GetClipboardSequenceNumber();
+            ClipboardSnapshot snapshot;
+            if (Clipboard.ContainsFileDropList())
+                snapshot = new(ClipboardSnapshotKind.Files, sequence);
+            else if (TryReadClipboardImage(out var png))
+                snapshot = new(ClipboardSnapshotKind.Image, sequence, Image: png);
+            else if (Clipboard.ContainsText())
+                snapshot = new(ClipboardSnapshotKind.Text, sequence, Text: Clipboard.GetText());
+            else
+                snapshot = new(ClipboardSnapshotKind.Unsupported, sequence);
+
+            if (sequence != GetClipboardSequenceNumber())
+                throw new InvalidOperationException("读取时剪贴板已变化，请重新按同步快捷键。");
+            return snapshot;
+        }, cancellationToken);
 
     public void SuppressTextCapture(string text)
     {
@@ -77,6 +131,7 @@ public sealed class ClipboardMonitor : IDisposable
         }
 
         _isDisposed = true;
+        _reader.Dispose();
         _window.SourceInitialized -= OnSourceInitialized;
         _window.Closing -= OnWindowClosing;
 
@@ -122,14 +177,30 @@ public sealed class ClipboardMonitor : IDisposable
     {
         if (message == WmClipboardUpdate)
         {
-            ReadClipboardText();
+            var sequence = GetClipboardSequenceNumber();
+            Volatile.Write(ref _observedSequence, sequence);
+            if (sequence != Volatile.Read(ref _suppressedSequence))
+            {
+                ClipboardChanged?.Invoke();
+                ScheduleCaptureAfterCopy();
+            }
         }
 
         return IntPtr.Zero;
     }
 
+    private async void ScheduleCaptureAfterCopy()
+    {
+        var generation = Interlocked.Increment(ref _copyReadGeneration);
+        // Give the foreground application the first opportunity to copy or paste.
+        await Task.Delay(100).ConfigureAwait(false);
+        if (!_isDisposed && generation == Volatile.Read(ref _copyReadGeneration)) QueueClipboardRead();
+    }
+
     private void ReadClipboardText()
     {
+        var sequence = GetClipboardSequenceNumber();
+        if (_isDisposed || sequence == Volatile.Read(ref _suppressedSequence)) return;
         if (_suppressedImageClipboardSequenceNumber is uint suppressedSequenceNumber)
         {
             if (GetClipboardSequenceNumber() == suppressedSequenceNumber)
@@ -143,9 +214,18 @@ public sealed class ClipboardMonitor : IDisposable
 
         try
         {
+            if (Clipboard.ContainsFileDropList())
+            {
+                var files = Clipboard.GetFileDropList().Cast<string>().ToArray();
+                if (sequence == GetClipboardSequenceNumber()) { Volatile.Write(ref _captureSequence, sequence); FilesCaptured?.Invoke(files); }
+                else QueueClipboardRead();
+                ResetClipboardReadRetry();
+                return;
+            }
             if (TryReadClipboardImage(out var imageBytes))
             {
-                ImageCaptured?.Invoke(imageBytes);
+                if (sequence == GetClipboardSequenceNumber()) { Volatile.Write(ref _captureSequence, sequence); ImageCaptured?.Invoke(imageBytes); }
+                else QueueClipboardRead();
                 ResetClipboardReadRetry();
                 return;
             }
@@ -163,7 +243,8 @@ public sealed class ClipboardMonitor : IDisposable
                     }
                 }
 
-                TextCaptured?.Invoke(text);
+                if (sequence == GetClipboardSequenceNumber()) { Volatile.Write(ref _captureSequence, sequence); TextCaptured?.Invoke(text); }
+                else QueueClipboardRead();
                 ResetClipboardReadRetry();
                 return;
             }
@@ -174,12 +255,50 @@ public sealed class ClipboardMonitor : IDisposable
         {
             ScheduleClipboardReadRetry();
         }
+        catch (Exception exception) when (exception is IOException or ArgumentException or NotSupportedException)
+        {
+            System.Diagnostics.Trace.TraceWarning("Clipboard capture failed: {0}", exception.Message);
+            ClipboardReadFailed?.Invoke();
+        }
+    }
+
+    private async void QueueClipboardRead()
+    {
+        if (_isDisposed) return;
+        Interlocked.Exchange(ref _readRequested, 1);
+        if (Interlocked.CompareExchange(ref _readerRunning, 1, 0) != 0) return;
+        try
+        {
+            do
+            {
+                Interlocked.Exchange(ref _readRequested, 0);
+                await _reader.RunAsync(() => { ReadClipboardText(); return true; }).ConfigureAwait(false);
+            } while (!_isDisposed && Volatile.Read(ref _readRequested) != 0);
+        }
+        catch (Exception exception)
+        {
+            if (!_isDisposed) System.Diagnostics.Trace.TraceWarning("Clipboard reader failed: {0}", exception.Message);
+        }
+        finally
+        {
+            Interlocked.Exchange(ref _readerRunning, 0);
+            if (!_isDisposed && Volatile.Read(ref _readRequested) != 0) QueueClipboardRead();
+        }
     }
 
     private bool TryReadClipboardImage(out byte[] pngBytes)
     {
         pngBytes = [];
+        byte[]? rawImage = null;
+        var isDib = false;
         var pngFormat = RegisterClipboardFormat("PNG");
+        // Most copies are text. Avoid opening and holding the global clipboard
+        // for image inspection when no image format is advertised.
+        if ((pngFormat == 0 || !IsClipboardFormatAvailable(pngFormat))
+            && !IsClipboardFormatAvailable(CfDibV5)
+            && !IsClipboardFormatAvailable(CfDib)
+            && !IsClipboardFormatAvailable(2)) // CF_BITMAP
+            return false;
         if (!OpenClipboard(_windowHandle))
         {
             throw new ExternalException("The clipboard is temporarily unavailable.", Marshal.GetLastWin32Error());
@@ -188,19 +307,18 @@ public sealed class ClipboardMonitor : IDisposable
         try
         {
             if (pngFormat != 0 && IsClipboardFormatAvailable(pngFormat)
-                && TryCopyClipboardData(pngFormat, out var rawPng)
-                && TryEncodeImage(rawPng, isDib: false, out pngBytes))
+                && TryCopyClipboardData(pngFormat, out var rawPng))
             {
-                return true;
+                rawImage = rawPng;
             }
 
             foreach (var dibFormat in new[] { CfDibV5, CfDib })
             {
-                if (IsClipboardFormatAvailable(dibFormat)
-                    && TryCopyClipboardData(dibFormat, out var dibBytes)
-                    && TryEncodeImage(dibBytes, isDib: true, out pngBytes))
+                if (rawImage is null && IsClipboardFormatAvailable(dibFormat)
+                    && TryCopyClipboardData(dibFormat, out var dibBytes))
                 {
-                    return true;
+                    rawImage = dibBytes;
+                    isDib = true;
                 }
             }
         }
@@ -208,6 +326,9 @@ public sealed class ClipboardMonitor : IDisposable
         {
             CloseClipboard();
         }
+
+        // Encoding must not hold the system clipboard open or block local writes.
+        if (rawImage is not null && TryEncodeImage(rawImage, isDib, out pngBytes)) return true;
 
         // Some applications publish only CF_BITMAP. WPF can still decode that fallback.
         if (Clipboard.ContainsImage())
@@ -325,47 +446,22 @@ public sealed class ClipboardMonitor : IDisposable
         return stream.ToArray();
     }
 
-    private void ScheduleClipboardReadRetry()
+    private async void ScheduleClipboardReadRetry()
     {
-        if (_isDisposed || _clipboardReadScheduled)
+        if (_isDisposed) return;
+        if (++_clipboardReadAttempts > 5)
         {
+            ResetClipboardReadRetry();
+            ClipboardReadFailed?.Invoke();
             return;
         }
-
-        _clipboardReadScheduled = true;
-        var timer = new DispatcherTimer(DispatcherPriority.Background, _window.Dispatcher)
-        {
-            Interval = TimeSpan.FromMilliseconds(40)
-        };
-        _clipboardRetryTimer = timer;
-        timer.Tick += (_, _) =>
-        {
-            timer.Stop();
-            _clipboardRetryTimer = null;
-            _clipboardReadScheduled = false;
-            if (_isDisposed)
-            {
-                return;
-            }
-
-            if (++_clipboardReadAttempts > 5)
-            {
-                ResetClipboardReadRetry();
-                ClipboardReadFailed?.Invoke();
-                return;
-            }
-
-            ReadClipboardText();
-        };
-        timer.Start();
+        await Task.Delay(40).ConfigureAwait(false);
+        QueueClipboardRead();
     }
 
     private void ResetClipboardReadRetry()
     {
-        _clipboardRetryTimer?.Stop();
-        _clipboardRetryTimer = null;
         _clipboardReadAttempts = 0;
-        _clipboardReadScheduled = false;
     }
 
     private static BitmapSource MakeVisibleDibImage(BitmapSource image)

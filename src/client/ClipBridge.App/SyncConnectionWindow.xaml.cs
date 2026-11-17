@@ -82,17 +82,17 @@ public partial class SyncConnectionWindow : Window
             var syncClient = ((App)WpfApplication.Current).SyncClient;
             if (!string.Equals(localCode, _initialDeviceCode, StringComparison.Ordinal))
             {
-                await syncClient.ConfigureDeviceCodeAsync(serverUri, localCode);
+                await Task.Run(() => syncClient.ConfigureDeviceCodeAsync(serverUri, localCode));
                 _initialDeviceCode = localCode;
                 ((App)WpfApplication.Current).LocalDeviceCode = localCode;
             }
 
-            await syncClient.ActivateDeviceAsync(serverUri);
+            await Task.Run(() => syncClient.ActivateDeviceAsync(serverUri));
 
             var peerCode = PeerDeviceCodeBox.Text.Trim().ToUpperInvariant();
             if (!string.IsNullOrEmpty(peerCode))
             {
-                await syncClient.RequestPairingAsync(serverUri, peerCode);
+                await Task.Run(() => syncClient.RequestPairingAsync(serverUri, peerCode));
                 _savedPeerDeviceCode = peerCode;
                 _hasSavedConnection = true;
                 StatusText.Text = "对端识别码已保存。若这是新设备，请在对端确认配对请求；已配对设备无需再次确认。";

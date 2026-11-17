@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using ClipBridge.Core.Diagnostics;
 using ClipBridge.Core.Interfaces;
+using ClipBridge.Core.Services;
 using ClipBridge.Storage.Repositories;
 using ClipBridge.Sync;
 
@@ -16,9 +17,11 @@ public partial class App : System.Windows.Application
     private SyncConnectionWindow? _syncConnectionWindow;
     private HistoryRetentionWindow? _historyRetentionWindow;
     private LocalHistoryCleanupService? _historyCleanupService;
+    private readonly CancellationTokenSource _networkStop = new();
 
     public IClipboardRepository ClipboardRepository { get; private set; } = null!;
     public ClipBridgeSyncClient SyncClient { get; private set; } = null!;
+    public LocalClipboardHistory LocalHistory { get; private set; } = null!;
     public string LocalDeviceCode { get; internal set; } = string.Empty;
     public string HistoryRetentionSettingsPath { get; private set; } = string.Empty;
 
@@ -32,6 +35,8 @@ public partial class App : System.Windows.Application
         var startupTimer = Stopwatch.StartNew();
         var localRepository = new SqliteClipboardRepository(Path.Combine(appDataDirectory, "clipbridge.db"));
         ClipboardRepository = localRepository;
+        LocalHistory = new LocalClipboardHistory(localRepository);
+        LocalHistory.Failed += exception => Trace.TraceError("Local clipboard history could not be saved: {0}", exception);
         HistoryRetentionSettingsPath = Path.Combine(appDataDirectory, "history-retention.json");
         _historyCleanupService = new LocalHistoryCleanupService(localRepository, HistoryRetentionSettingsPath);
         StartupPerformanceLog.Write("app.database-ready", startupTimer.Elapsed);
@@ -39,7 +44,6 @@ public partial class App : System.Windows.Application
         SyncClient = new ClipBridgeSyncClient(
             ClipboardRepository,
             Path.Combine(appDataDirectory, "sync-profiles.json"));
-        LocalDeviceCode = SyncClient.GetLocalDeviceCodeAsync().GetAwaiter().GetResult();
         StartupPerformanceLog.Write("app.local-device-ready", startupTimer.Elapsed);
         SyncClient.PairingRequestReceived += OnPairingRequestReceived;
 
@@ -59,14 +63,38 @@ public partial class App : System.Windows.Application
 
         _trayIconService = new TrayIconService();
         StartupPerformanceLog.Write("app.startup-ready", appStartupTimer.Elapsed);
-        _ = SyncClient.RestoreDeviceSessionAsync();
+        _ = Task.Run(InitializeSyncAsync);
+    }
+
+    private async Task InitializeSyncAsync()
+    {
+        try
+        {
+            var code = await SyncClient.GetLocalDeviceCodeAsync(_networkStop.Token).ConfigureAwait(false);
+            await Dispatcher.InvokeAsync(() =>
+            {
+                LocalDeviceCode = code;
+                _syncConnectionWindow?.SetLocalDeviceCode(code);
+            });
+            await SyncClient.RestoreDeviceSessionAsync(_networkStop.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (_networkStop.IsCancellationRequested) { }
+        catch (Exception exception) { Trace.TraceError("Background synchronization startup failed: {0}", exception); }
     }
 
     protected override void OnExit(ExitEventArgs e)
     {
-        _historyCleanupService?.Dispose();
+        (MainWindow as MainWindow)?.StopLocalServices();
+        _networkStop.Cancel();
         _trayIconService?.Dispose();
-        SyncClient.DisposeAsync().AsTask().GetAwaiter().GetResult();
+        // Neither an unavailable server nor a locked database may hold the UI at exit.
+        try
+        {
+            Task.WhenAll(LocalHistory.DisposeAsync().AsTask(),
+                Task.Run(() => _historyCleanupService?.Dispose()),
+                Task.Run(async () => await SyncClient.DisposeAsync())).Wait(TimeSpan.FromSeconds(2));
+        }
+        catch (AggregateException exception) { Trace.TraceWarning("Background shutdown failed: {0}", exception); }
         base.OnExit(e);
     }
 
@@ -131,7 +159,7 @@ public partial class App : System.Windows.Application
 
             var window = new PairingRequestWindow(
                 request,
-                accept => SyncClient.DecidePairingRequestAsync(request.Id, accept, peerDeviceCode: request.RequesterCode),
+                accept => Task.Run(() => SyncClient.DecidePairingRequestAsync(request.Id, accept, peerDeviceCode: request.RequesterCode)),
                 () => SyncClient.DismissPairingPrompt(request.Id));
             window.Closed += (_, _) => _pairingRequestWindows.Remove(request.Id);
             _pairingRequestWindows.Add(request.Id, window);

@@ -8,6 +8,18 @@ namespace ClipBridge.Tests;
 
 public sealed class SqliteClipboardRepositoryTests : IDisposable
 {
+    [Fact]
+    public void CleanupCanRemoveLocalOnlyHistoryWhilePreservingPendingUploads()
+    {
+        var repository = new SqliteClipboardRepository(DatabasePath);
+        var localOnly = repository.AddText("local-only", "local", allowAutomaticUpload: false)!;
+        Thread.Sleep(15);
+        var pending = repository.AddText("pending", "local")!;
+        repository.CleanupHistoryWithLimits(0, 1, 0);
+        Assert.Null(repository.FindById(localOnly.Id));
+        Assert.NotNull(repository.FindById(pending.Id));
+    }
+
     private readonly string _directory = Path.Combine(
         Path.GetTempPath(),
         "ClipBridge.Tests",
@@ -458,6 +470,7 @@ public sealed class SqliteClipboardRepositoryTests : IDisposable
 
         Assert.NotNull(existing);
         Assert.Null(existing.LastUsedAtUnixMilliseconds);
+        Assert.Contains(repository.GetPendingTexts(10), item => item.Id == "existing");
         Assert.True(repository.MarkUsed(existing.Id));
         Assert.NotNull(repository.FindById(existing.Id)!.LastUsedAtUnixMilliseconds);
     }

@@ -4,7 +4,7 @@ namespace ClipBridge.Core.Interfaces;
 
 public interface IClipboardRepository
 {
-    ClipboardItem? AddText(string text, string originDeviceId);
+    ClipboardItem? AddText(string text, string originDeviceId, bool allowAutomaticUpload = true);
 
     void UpsertRemoteText(ClipboardItem item, bool originatedLocally);
 
@@ -12,13 +12,17 @@ public interface IClipboardRepository
 
     bool MarkSynced(string id);
 
-    ClipboardItem AddImage(ReadOnlyMemory<byte> pngBytes, string originDeviceId);
+    ClipboardItem AddImage(ReadOnlyMemory<byte> pngBytes, string originDeviceId, bool allowAutomaticUpload = true);
+
+    ClipboardItem AddFiles(IReadOnlyList<string> paths, string originDeviceId);
+
+    IReadOnlyList<ClipboardItem> GetPendingTexts(int limit, long sinceUnixMilliseconds = 0);
 
     ClipboardItem UpsertRemoteImage(string id, string originDeviceId, ReadOnlyMemory<byte> pngBytes, long createdAtUnixMilliseconds);
 
     bool MarkImageSynced(string id);
 
-    IReadOnlyList<ClipboardItem> GetPendingImages(int limit);
+    IReadOnlyList<ClipboardItem> GetPendingImages(int limit, long sinceUnixMilliseconds = 0);
 
     int GetTextCount();
 

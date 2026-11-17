@@ -146,7 +146,7 @@
                                             </Style>
                                         </TextBlock.Style>
                                     </TextBlock>
-                                    <Image Source="{Binding ImagePath, Converter={StaticResource ImagePathToBitmapSourceConverter}}"
+                                    <Image Source="{Binding Thumbnail}"
                                            Width="28" Height="28"
                                            HorizontalAlignment="Left" VerticalAlignment="Center"
                                            Stretch="Uniform" SnapsToDevicePixels="True">

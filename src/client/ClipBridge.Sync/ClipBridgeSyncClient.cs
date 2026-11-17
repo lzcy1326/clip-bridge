@@ -5,6 +5,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Text;
 using System.Collections.Concurrent;
 using ClipBridge.Core.Diagnostics;
 using ClipBridge.Core.Interfaces;
@@ -25,6 +26,7 @@ public sealed class ClipBridgeSyncClient : IAsyncDisposable
     private readonly SemaphoreSlim _authenticationLock = new(1, 1);
     private CancellationTokenSource? _pollCancellation;
     private Task? _pollTask;
+    private Task? _textUploadTask;
     private Task? _imagePollTask;
     private Task? _notificationTask;
     private string? _accessToken;
@@ -36,6 +38,11 @@ public sealed class ClipBridgeSyncClient : IAsyncDisposable
     private Uri? _profileServerUri;
     private SyncProfile? _profile;
     private long _deviceId;
+    private long _liveSinceUnixMilliseconds;
+    private long _serverClockOffsetMilliseconds;
+    private long _serverClockUncertaintyMilliseconds = 1500;
+    private volatile bool _needsLiveReset;
+    private int _automaticUploadEnabled = 1;
     private string? _peerDeviceCode;
 
     public ClipBridgeSyncClient(IClipboardRepository repository, string settingsPath)
@@ -47,6 +54,7 @@ public sealed class ClipBridgeSyncClient : IAsyncDisposable
     }
 
     public event Action? HistoryUpdated;
+    public event Action<ClipboardItem>? RemoteClipboardReceived;
     public event Action<string>? StatusChanged;
     public event Action<PendingPairingInfo>? PairingRequestReceived;
 
@@ -57,8 +65,19 @@ public sealed class ClipBridgeSyncClient : IAsyncDisposable
         _deviceCodeStore.GetOrCreateAsync(cancellationToken);
 
     public bool IsConnected => _accessToken is not null && _serverUri is not null;
+    public bool AutomaticUploadEnabled => Volatile.Read(ref _automaticUploadEnabled) != 0;
+    public long ServerClockOffsetMilliseconds => Interlocked.Read(ref _serverClockOffsetMilliseconds);
+    public long ServerClockUncertaintyMilliseconds => Interlocked.Read(ref _serverClockUncertaintyMilliseconds);
 
     public void ReportStatus(string status) => StatusChanged?.Invoke(status);
+
+    public void SetAutomaticUploadEnabled(bool enabled)
+    {
+        // Switching to automatic mode must not upload items copied in manual mode.
+        if (enabled && Volatile.Read(ref _automaticUploadEnabled) == 0)
+            Interlocked.Exchange(ref _liveSinceUnixMilliseconds, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+        Interlocked.Exchange(ref _automaticUploadEnabled, enabled ? 1 : 0);
+    }
 
     public async Task ConnectAsync(Uri serverUri, string username, string password, CancellationToken cancellationToken = default)
     {
@@ -115,11 +134,9 @@ public sealed class ClipBridgeSyncClient : IAsyncDisposable
         }
 
         StatusChanged?.Invoke($"已连接 {login.User.DisplayName} · {_serverUri.Host}");
+        await ResetLivePositionAsync(cancellationToken).ConfigureAwait(false);
         await PullAvailableHistoryAsync(cancellationToken).ConfigureAwait(false);
-        _pollCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        _pollTask = PollLoopAsync(_pollCancellation.Token);
-        _imagePollTask = ImagePollLoopAsync(_pollCancellation.Token, immediateFirstCycle: true);
-        _notificationTask = NotificationLoopAsync(_pollCancellation.Token);
+        StartPolling(cancellationToken);
     }
 
     public async Task ActivateDeviceAsync(Uri serverUri, CancellationToken cancellationToken = default)
@@ -235,6 +252,7 @@ public sealed class ClipBridgeSyncClient : IAsyncDisposable
                 await RememberPeerDeviceCodeAsync(normalizedPeerCode, cancellationToken).ConfigureAwait(false);
             }
 
+            await ResetLivePositionAsync(cancellationToken).ConfigureAwait(false);
             await PullAvailableHistoryAsync(cancellationToken).ConfigureAwait(false);
             await PullAvailableImagesAsync(cancellationToken).ConfigureAwait(false);
         }
@@ -325,15 +343,7 @@ public sealed class ClipBridgeSyncClient : IAsyncDisposable
             return;
         }
 
-        try
-        {
-            response.EnsureSuccessStatusCode();
-        }
-        catch (HttpRequestException)
-        {
-            StatusChanged?.Invoke("Server 暂时不可用");
-            throw;
-        }
+        response.EnsureSuccessStatusCode();
         _repository.MarkSynced(item.Id);
         StatusChanged?.Invoke("已同步");
     }
@@ -417,6 +427,7 @@ public sealed class ClipBridgeSyncClient : IAsyncDisposable
             try
             {
                 var isRestoreCycle = reportRestoreSuccess;
+                if (_needsLiveReset) await ResetLivePositionAsync(cancellationToken).ConfigureAwait(false);
                 await PullAvailableHistoryAsync(cancellationToken, measurePerformance: isRestoreCycle).ConfigureAwait(false);
                 if (reportRestoreSuccess)
                 {
@@ -430,18 +441,61 @@ public sealed class ClipBridgeSyncClient : IAsyncDisposable
             {
                 break;
             }
-            catch (HttpRequestException)
+            catch (HttpRequestException exception)
             {
-                StatusChanged?.Invoke("Server 暂时不可用，正在重试");
+                if (exception.StatusCode is null or >= HttpStatusCode.InternalServerError) _needsLiveReset = true;
+                StatusChanged?.Invoke(exception.StatusCode is { } status
+                    ? $"接收同步失败（HTTP {(int)status}），正在重试"
+                    : "Server 暂时不可用，正在重试");
             }
             catch (TaskCanceledException) when (!cancellationToken.IsCancellationRequested)
             {
+                _needsLiveReset = true;
                 StatusChanged?.Invoke("Server 响应超时，正在重试");
             }
             catch (Exception exception)
             {
                 System.Diagnostics.Trace.TraceError("ClipBridge history sync failed: {0}", exception);
                 StatusChanged?.Invoke("同步暂时失败，正在重试");
+            }
+        }
+    }
+
+    private async Task TextUploadLoopAsync(CancellationToken cancellationToken)
+    {
+        using var timer = new PeriodicTimer(PollInterval);
+        while (await timer.WaitForNextTickAsync(cancellationToken).ConfigureAwait(false))
+        {
+            try
+            {
+                if (_needsLiveReset || Volatile.Read(ref _automaticUploadEnabled) == 0) continue;
+                foreach (var item in _repository.GetPendingTexts(20, Interlocked.Read(ref _liveSinceUnixMilliseconds)))
+                {
+                    if (Volatile.Read(ref _automaticUploadEnabled) == 0) break;
+                    try { await PublishTextAsync(item, cancellationToken).ConfigureAwait(false); }
+                    catch (HttpRequestException exception) when (exception.StatusCode is >= HttpStatusCode.BadRequest and < HttpStatusCode.InternalServerError)
+                    {
+                        StatusChanged?.Invoke($"文字上传被拒绝（HTTP {(int)exception.StatusCode.Value}），接收同步继续运行");
+                    }
+                }
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { break; }
+            catch (HttpRequestException exception)
+            {
+                if (exception.StatusCode is null or >= HttpStatusCode.InternalServerError) _needsLiveReset = true;
+                StatusChanged?.Invoke(exception.StatusCode is { } status
+                    ? $"文字上传失败（HTTP {(int)status}），正在重试"
+                    : "文字上传连接失败，正在重试");
+            }
+            catch (TaskCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                _needsLiveReset = true;
+                StatusChanged?.Invoke("文字上传超时，正在重试");
+            }
+            catch (Exception exception)
+            {
+                Trace.TraceError("ClipBridge text upload failed: {0}", exception);
+                StatusChanged?.Invoke("文字上传暂时失败，正在重试");
             }
         }
     }
@@ -456,8 +510,10 @@ public sealed class ClipBridgeSyncClient : IAsyncDisposable
         await _pullLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         var pullTimer = Stopwatch.StartNew();
         var receivedCount = 0;
+        ClipboardItem? newestRemote = null;
         try
         {
+            if (_needsLiveReset) return;
             var cursor = _profile.Cursor;
             var receivedAny = false;
             while (true)
@@ -499,12 +555,12 @@ public sealed class ClipBridgeSyncClient : IAsyncDisposable
                 var localItems = new List<ClipboardItem>(page.Items.Length);
                 foreach (var remoteItem in page.Items)
                 {
-                    if (remoteItem.Type != "TEXT" || string.IsNullOrWhiteSpace(remoteItem.Text))
+                    if (remoteItem.Type != "TEXT" || remoteItem.OriginDeviceId == _deviceId || string.IsNullOrWhiteSpace(remoteItem.Text))
                     {
                         continue;
                     }
 
-                    localItems.Add(new ClipboardItem(
+                    var item = new ClipboardItem(
                         remoteItem.Id,
                         remoteItem.OriginDeviceName,
                         ClipboardItemType.Text,
@@ -513,7 +569,10 @@ public sealed class ClipBridgeSyncClient : IAsyncDisposable
                         remoteItem.ContentHash,
                         remoteItem.CreatedAt.ToUnixTimeMilliseconds(),
                         true,
-                        remoteItem.OriginDeviceId != _deviceId));
+                        true);
+                    localItems.Add(item);
+                    if (newestRemote is null || item.CreatedAtUnixMilliseconds > newestRemote.CreatedAtUnixMilliseconds)
+                        newestRemote = item;
                 }
 
                 if (localItems.Count > 0)
@@ -565,6 +624,7 @@ public sealed class ClipBridgeSyncClient : IAsyncDisposable
                 StartupPerformanceLog.Write("sync.history-catchup-total", pullTimer.Elapsed, receivedCount);
             }
         }
+        if (newestRemote is not null) RemoteClipboardReceived?.Invoke(newestRemote);
     }
 
     private async Task EnsureDeviceSessionAsync(Uri serverUri, CancellationToken cancellationToken)
@@ -651,6 +711,36 @@ public sealed class ClipBridgeSyncClient : IAsyncDisposable
         }
 
         _httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", _accessToken);
+        await ResetLivePositionAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task ResetLivePositionAsync(CancellationToken cancellationToken)
+    {
+        if (_serverUri is null || _profile is null || _profileServerUri is null) return;
+        await _pullLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            var requestStartedAt = DateTimeOffset.UtcNow;
+            using var response = await _httpClient.GetAsync(new Uri(_serverUri, "health"), cancellationToken).ConfigureAwait(false);
+            var responseReceivedAt = DateTimeOffset.UtcNow;
+            response.EnsureSuccessStatusCode();
+            // The current server cursor is a URL-safe base64 JSON timestamp and ID.
+            // Use the server's clock when available to avoid client clock skew.
+            var serverNow = response.Headers.Date ?? DateTimeOffset.UtcNow;
+            var roundTripMilliseconds = Math.Max(0, (responseReceivedAt - requestStartedAt).TotalMilliseconds);
+            Interlocked.Exchange(ref _serverClockOffsetMilliseconds,
+                serverNow.ToUnixTimeMilliseconds() - responseReceivedAt.ToUnixTimeMilliseconds());
+            // HTTP Date has one-second precision; allow for that and the request round trip.
+            Interlocked.Exchange(ref _serverClockUncertaintyMilliseconds,
+                (long)Math.Ceiling(1000 + roundTripMilliseconds));
+            var cursorJson = JsonSerializer.Serialize(new { created_at = serverNow, id = "0" });
+            var cursor = Convert.ToBase64String(Encoding.UTF8.GetBytes(cursorJson)).TrimEnd('=').Replace('+', '-').Replace('/', '_');
+            _profile = _profile with { Cursor = cursor, ImageCursor = cursor };
+            await _profileStore.SaveAsync(_profileServerUri, _profile.Username, _profile, cancellationToken).ConfigureAwait(false);
+            Interlocked.Exchange(ref _liveSinceUnixMilliseconds, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+            _needsLiveReset = false;
+        }
+        finally { _pullLock.Release(); }
     }
 
     private static Uri CreateServerBaseUri(Uri serverUri)
@@ -701,6 +791,7 @@ public sealed class ClipBridgeSyncClient : IAsyncDisposable
 
         _pollCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         _pollTask = PollLoopAsync(_pollCancellation.Token, immediateFirstCycle, reportRestoreSuccess);
+        _textUploadTask = TextUploadLoopAsync(_pollCancellation.Token);
         _imagePollTask = ImagePollLoopAsync(_pollCancellation.Token, immediateFirstCycle: true);
         _notificationTask = NotificationLoopAsync(_pollCancellation.Token);
     }
@@ -909,8 +1000,12 @@ public sealed class ClipBridgeSyncClient : IAsyncDisposable
             runCycle = false;
             try
             {
-                foreach (var pendingImage in _repository.GetPendingImages(20))
+                if (_needsLiveReset) continue;
+                foreach (var pendingImage in Volatile.Read(ref _automaticUploadEnabled) == 0
+                    ? Array.Empty<ClipboardItem>()
+                    : _repository.GetPendingImages(20, Interlocked.Read(ref _liveSinceUnixMilliseconds)))
                 {
+                    if (Volatile.Read(ref _automaticUploadEnabled) == 0) break;
                     await PublishImageAsync(pendingImage, cancellationToken).ConfigureAwait(false);
                 }
 
@@ -920,12 +1015,14 @@ public sealed class ClipBridgeSyncClient : IAsyncDisposable
             {
                 break;
             }
-            catch (HttpRequestException)
+            catch (HttpRequestException exception)
             {
+                if (exception.StatusCode is null or >= HttpStatusCode.InternalServerError) _needsLiveReset = true;
                 // Image transfer retries independently and never interrupts text sync.
             }
             catch (TaskCanceledException) when (!cancellationToken.IsCancellationRequested)
             {
+                _needsLiveReset = true;
                 // The next cycle retries timed-out image requests.
             }
             catch (Exception exception)
@@ -944,8 +1041,10 @@ public sealed class ClipBridgeSyncClient : IAsyncDisposable
 
         await _pullLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         var receivedAny = false;
+        ClipboardItem? newestRemote = null;
         try
         {
+            if (_needsLiveReset) return;
             var cursor = _profile.ImageCursor;
             while (true)
             {
@@ -987,7 +1086,10 @@ public sealed class ClipBridgeSyncClient : IAsyncDisposable
 
                     imageResponse.EnsureSuccessStatusCode();
                     var bytes = await ReadBoundedImageAsync(imageResponse.Content, cancellationToken).ConfigureAwait(false);
-                    _repository.UpsertRemoteImage(image.Id, image.OriginDeviceName, bytes, image.CreatedAt.ToUnixTimeMilliseconds());
+                    var stored = _repository.UpsertRemoteImage(image.Id, image.OriginDeviceName, bytes, image.CreatedAt.ToUnixTimeMilliseconds());
+                    var incoming = stored with { CreatedAtUnixMilliseconds = image.CreatedAt.ToUnixTimeMilliseconds() };
+                    if (newestRemote is null || incoming.CreatedAtUnixMilliseconds > newestRemote.CreatedAtUnixMilliseconds)
+                        newestRemote = incoming;
                     receivedAny = true;
                 }
 
@@ -1018,6 +1120,7 @@ public sealed class ClipBridgeSyncClient : IAsyncDisposable
         {
             HistoryUpdated?.Invoke();
         }
+        if (newestRemote is not null) RemoteClipboardReceived?.Invoke(newestRemote);
     }
 
     private static async Task<byte[]> ReadBoundedImageAsync(HttpContent content, CancellationToken cancellationToken)
@@ -1123,6 +1226,12 @@ public sealed class ClipBridgeSyncClient : IAsyncDisposable
             }
         }
 
+        if (_textUploadTask is not null)
+        {
+            try { await _textUploadTask.ConfigureAwait(false); }
+            catch (OperationCanceledException) { }
+        }
+
         if (_notificationTask is not null)
         {
             try
@@ -1137,6 +1246,7 @@ public sealed class ClipBridgeSyncClient : IAsyncDisposable
         _pollCancellation.Dispose();
         _pollCancellation = null;
         _pollTask = null;
+        _textUploadTask = null;
         _imagePollTask = null;
         _notificationTask = null;
     }

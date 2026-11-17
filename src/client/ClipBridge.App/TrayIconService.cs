@@ -25,6 +25,24 @@ internal sealed class TrayIconService : IDisposable
         _syncStatusItem = new Forms.ToolStripMenuItem("同步：未连接") { Enabled = false };
         menu.Items.Add(_syncStatusItem);
         menu.Items.Add("连接同步…", null, (_, _) => ShowSyncConnectionWindow());
+        var automaticSync = new Forms.ToolStripMenuItem("自动同步本机复制和截图");
+        menu.Opening += (_, _) =>
+        {
+            if (WpfApplication.Current.MainWindow is MainWindow main) automaticSync.Checked = main.AutomaticSyncEnabled;
+        };
+        automaticSync.Click += (_, _) => WpfApplication.Current.Dispatcher.Invoke(() =>
+        {
+            if (WpfApplication.Current.MainWindow is MainWindow main)
+            {
+                main.SetAutomaticSyncEnabled(!main.AutomaticSyncEnabled);
+                automaticSync.Checked = main.AutomaticSyncEnabled;
+            }
+        });
+        menu.Items.Add(automaticSync);
+        menu.Items.Add("同步快捷键…", null, (_, _) => WpfApplication.Current.Dispatcher.Invoke(() =>
+        {
+            if (WpfApplication.Current.MainWindow is MainWindow window) window.ShowSyncShortcutSettings();
+        }));
         var autoStartItem = new Forms.ToolStripMenuItem("开机时自动启动")
         {
             CheckOnClick = true,
@@ -67,6 +85,24 @@ internal sealed class TrayIconService : IDisposable
             }
 
             _syncStatusItem.Text = "同步：" + status;
+            if (WpfApplication.Current.MainWindow is MainWindow main && !main.AutomaticSyncEnabled
+                && (status is "已同步" or "截图已同步"
+                    || status.StartsWith("同步未完成", StringComparison.Ordinal)
+                    || status.StartsWith("当前程序没有复制", StringComparison.Ordinal)
+                    || status.StartsWith("剪贴板已变化", StringComparison.Ordinal)
+                    || status.StartsWith("文件仅支持", StringComparison.Ordinal)
+                    || status.StartsWith("图片超过", StringComparison.Ordinal)
+                    || status.StartsWith("未连接同步服务", StringComparison.Ordinal)
+                    || status.StartsWith("无法返回原窗口", StringComparison.Ordinal)
+                    || status.StartsWith("当前剪贴板没有", StringComparison.Ordinal)
+                    || status.StartsWith("设备凭证已失效", StringComparison.Ordinal)
+                    || status.StartsWith("登录已过期", StringComparison.Ordinal)
+                    || status.StartsWith("已尝试本机复制", StringComparison.Ordinal)))
+            {
+                _notifyIcon.BalloonTipTitle = "ClipBridge";
+                _notifyIcon.BalloonTipText = status;
+                _notifyIcon.ShowBalloonTip(3000);
+            }
         });
     }
 
