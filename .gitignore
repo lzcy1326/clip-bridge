@@ -8,3 +8,6 @@
 .env
 .env.*
 !.env.example
+
+# 本地智能体工作区（记忆与临时文件）
+.workbuddy/

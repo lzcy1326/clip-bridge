@@ -1,5 +1,5 @@
 #define AppName "ClipBridge"
-#define AppVersion "1.0.2"
+#define AppVersion "1.0.4"
 #define AppPublisher "ClipBridge"
 #define AppExeName "ClipBridge.exe"
 #define PublishDir "..\artifacts\ClipBridge"

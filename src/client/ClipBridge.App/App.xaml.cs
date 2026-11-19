@@ -18,6 +18,7 @@ public partial class App : System.Windows.Application
     private HistoryRetentionWindow? _historyRetentionWindow;
     private LocalHistoryCleanupService? _historyCleanupService;
     private readonly CancellationTokenSource _networkStop = new();
+    private bool _isExiting;
 
     public IClipboardRepository ClipboardRepository { get; private set; } = null!;
     public ClipBridgeSyncClient SyncClient { get; private set; } = null!;
@@ -170,10 +171,24 @@ public partial class App : System.Windows.Application
 
     public void ExitApplication()
     {
+        if (_isExiting)
+        {
+            return;
+        }
+
+        _isExiting = true;
         if (MainWindow is MainWindow mainWindow)
         {
             mainWindow.AllowApplicationExit();
         }
+
+        // 兜底：Shutdown 若因异常路径未能结束进程，至少不要留下幽灵菜单和后台实例。
+        // 正常退出会在计时器触发前结束进程。
+        _ = Task.Run(async () =>
+        {
+            await Task.Delay(TimeSpan.FromSeconds(6));
+            Environment.Exit(0);
+        });
 
         Shutdown();
     }

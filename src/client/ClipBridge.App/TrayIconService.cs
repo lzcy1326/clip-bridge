@@ -1,5 +1,6 @@
 using System.Drawing;
 using System.Windows;
+using System.Windows.Threading;
 using Forms = System.Windows.Forms;
 using WpfApplication = System.Windows.Application;
 
@@ -8,6 +9,7 @@ namespace ClipBridge.App;
 internal sealed class TrayIconService : IDisposable
 {
     private readonly Forms.NotifyIcon _notifyIcon;
+    private readonly Forms.ContextMenuStrip _menu;
     private readonly Icon _trayIcon;
     private readonly Forms.ToolStripMenuItem _syncStatusItem;
 
@@ -22,15 +24,17 @@ internal sealed class TrayIconService : IDisposable
         }
 
         var menu = new Forms.ContextMenuStrip();
+        _menu = menu;
+        menu.Renderer = new TrayMenuRenderer();
         _syncStatusItem = new Forms.ToolStripMenuItem("同步：未连接") { Enabled = false };
         menu.Items.Add(_syncStatusItem);
-        menu.Items.Add("连接同步…", null, (_, _) => ShowSyncConnectionWindow());
+        menu.Items.Add("连接同步…", null, (_, _) => RunAfterMenuCloses(ShowSyncConnectionWindow));
         var automaticSync = new Forms.ToolStripMenuItem("自动同步本机复制和截图");
         menu.Opening += (_, _) =>
         {
             if (WpfApplication.Current.MainWindow is MainWindow main) automaticSync.Checked = main.AutomaticSyncEnabled;
         };
-        automaticSync.Click += (_, _) => WpfApplication.Current.Dispatcher.Invoke(() =>
+        automaticSync.Click += (_, _) => RunAfterMenuCloses(() =>
         {
             if (WpfApplication.Current.MainWindow is MainWindow main)
             {
@@ -39,7 +43,7 @@ internal sealed class TrayIconService : IDisposable
             }
         });
         menu.Items.Add(automaticSync);
-        menu.Items.Add("同步快捷键…", null, (_, _) => WpfApplication.Current.Dispatcher.Invoke(() =>
+        menu.Items.Add("同步快捷键…", null, (_, _) => RunAfterMenuCloses(() =>
         {
             if (WpfApplication.Current.MainWindow is MainWindow window) window.ShowSyncShortcutSettings();
         }));
@@ -50,11 +54,11 @@ internal sealed class TrayIconService : IDisposable
         };
         autoStartItem.CheckedChanged += (_, _) => UpdateAutoStart(autoStartItem);
         menu.Items.Add(autoStartItem);
-        menu.Items.Add("历史清理设置…", null, (_, _) => ShowHistoryRetentionWindow());
+        menu.Items.Add("历史清理设置…", null, (_, _) => RunAfterMenuCloses(ShowHistoryRetentionWindow));
         menu.Items.Add(new Forms.ToolStripSeparator());
-        menu.Items.Add("打开 ClipBridge", null, (_, _) => ShowMainWindow());
+        menu.Items.Add("打开 ClipBridge", null, (_, _) => RunAfterMenuCloses(ShowMainWindow));
         menu.Items.Add(new Forms.ToolStripSeparator());
-        menu.Items.Add("退出", null, (_, _) => ((App)WpfApplication.Current).ExitApplication());
+        menu.Items.Add("退出", null, (_, _) => RunAfterMenuCloses(() => ((App)WpfApplication.Current).ExitApplication()));
 
         _notifyIcon = new Forms.NotifyIcon
         {
@@ -70,9 +74,25 @@ internal sealed class TrayIconService : IDisposable
     public void Dispose()
     {
         ((App)WpfApplication.Current).SyncClient.StatusChanged -= OnSyncStatusChanged;
+        if (_menu.Visible)
+        {
+            _menu.Close();
+        }
+
         _notifyIcon.Visible = false;
         _notifyIcon.Dispose();
+        _menu.Dispose();
         _trayIcon.Dispose();
+    }
+
+    private void RunAfterMenuCloses(Action action)
+    {
+        // 菜单项的 Click 回调运行在这个下拉菜单自己的消息循环里。若在回调中同步执行
+        // Shutdown（或弹出模态窗口），托盘图标/菜单被销毁时消息循环还没退出，会表现为
+        // 点击“退出”无反应、菜单残留在桌面、进程无法结束。先关闭菜单让回调正常返回，
+        // 再把动作排进 WPF 调度器，等消息循环退出后再执行。
+        _menu.Close();
+        WpfApplication.Current.Dispatcher.BeginInvoke(action, DispatcherPriority.Background);
     }
 
     private void OnSyncStatusChanged(string status)
